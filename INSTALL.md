@@ -14,7 +14,7 @@ Cependant, l'utilisation de Web Workers (`worker.js`) requiert l'exécution via 
 3. Naviguez sur `http://localhost:8000`.
 
 ## 2. Déploiement sur GitHub Pages (incluant MkDocs)
-Ce dépôt inclut MkDocs pour la documentation avancée étudiante.
+Ce dépôt inclut MkDocs pour la documentation avancée.
 
 ### Étape 1 : Préparation de GitHub Actions
 Créez un fichier `.github/workflows/deploy.yml` avec le contenu standard pour MkDocs. 

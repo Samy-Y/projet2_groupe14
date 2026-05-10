@@ -88,4 +88,4 @@ L'architecture est volontairement explicite :
 - séparation strict UI vs parsing,
 - aucun framework imposant un modèle de structure.
 
-L'objectif est de conserver une base modifiable et compréhensible pour un public étudiant.
+L'objectif est de conserver une base modifiable et compréhensible.
