@@ -1,5 +1,6 @@
 site_name: Système Cartésien - Documentation
 site_author: Groupe 14 Class2030
+site_url: https://samy-y.github.io/projet2_groupe14/help/
 
 theme:
   name: material

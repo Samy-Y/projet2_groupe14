@@ -1,22 +1,49 @@
-name: deploy
+name: Global Deployment (UI + Docs)
+
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: ["main"]
+
 permissions:
   contents: write
+
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure Git Credentials
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-      - uses: actions/setup-python@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: 3.x
-      - run: pip install mkdocs mkdocs-material
-      - run: mkdocs gh-deploy --force
+          python-version: "3.11"
+
+      - name: Install MkDocs Dependencies
+        run: pip install mkdocs mkdocs-material
+
+      - name: Build Documentation
+        run: mkdocs build
+
+      - name: Prepare Deployment Directory
+        run: |
+          # Créer un dossier temporaire pour le déploiement
+          mkdir public
+          
+          # 1. Copier l'interface graphique (fichiers racine + assets)
+          cp index.html public/
+          cp styles.css public/
+          cp app.js public/
+          cp worker.js public/
+          cp -r assets public/
+          
+          # 2. Déplacer la documentation compilée dans un sous-dossier 'help'
+          # Le dossier 'site' est généré par 'mkdocs build'
+          mv site public/help
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          force_orphan: true
