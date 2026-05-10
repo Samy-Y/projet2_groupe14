@@ -1,0 +1,14 @@
+site_name: Système Cartésien - Documentation
+site_author: Groupe 14 Class2030
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.indexes
+
+nav:
+  - Accueil: index.md
+  - Guide d'installation: install.md
+  - Référence API JS: api.md
+  - Architecture Matérielle: architecture.md
