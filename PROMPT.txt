@@ -1,0 +1,162 @@
+Agis en tant qu'ingénieur Full-Stack spécialisé en systèmes mécatroniques pour concevoir une interface de commande Web (IHM) hautes performances, pilotée par WebSerial, pour un traceur de plans cartésien.
+
+Contexte Technique :
+
+Le système est un traceur de plans à trois degrés de liberté ($X, Y, Z$) piloté par un microcontrôleur Arduino Mega 2560 via une liaison série UART (115200 bauds).
+
+Le déplacement dans le plan horizontal repose sur une architecture CoreXY (ou H-Bot, plus précisément H8). 
+- Actionneurs : 2 moteurs pas-à-pas Nema 17 (200 pas/tr).
+- Transmission : Courroies crantées GT2 (poulies 20 dents, pas de 2 mm).
+- Modèle de couplage : Les mouvements résultants (X, Y) sont une combinaison linéaire des rotations moteurs (M1, M2) :
+  - \Delta x = \frac{R}{2}(\Delta\theta_1 + \Delta\theta_2)
+  - \Delta y = \frac{R}{2}(\Delta\theta_1 - \Delta\theta_2)
+- Résolution : 0,2 mm par impulsion moteur.
+
+L'axe Z gère la levée du stylet pour alterner entre les phases de tracé et de déplacement rapide.
+- Actionneur : 1 moteur Nema 17.
+- Transmission : Système vis-écrou.
+- Compliance : Montage hybride incluant une solution de compliance passive (bandes élastiques) pour absorber les chocs et compenser les irrégularités de planéité du support.
+
+Le micrologiciel (firmware) intègre un pipeline de traitement déterministe :
+- Interpolation : Algorithme DDA (Digital Differential Analyzer) exécuté dans le référentiel moteur pour garantir la rectitude des vecteurs et supprimer le jitter temporel.
+- Dynamique : Profil de vitesse trapézoïdal avec une vitesse initiale plancher (V_min = 20 RPM) pour franchir les zones de résonance mécanique.
+- Sécurité : Surveillance active via 3 capteurs de fin de course (limit switches) et bornage logiciel (soft limits) via la fonction `constrain`.
+- Communication : Protocole de commande textuel structuré (ex: `x100y50v60`) géré de manière asynchrone.
+- Drivers utilisés : TB6560.
+- Zone de traçage : Elle mesure 400x400mm. En revanche, quelques modifications post-fabrication peuvent être réalisées. On doit être capable de changer ce paramètre facilement depuis le backend (réfère toi aux constantes/paramètres contenues dans le code Arduino en pièce jointe).
+- Déplacement maximal selon Z : 100mm. Encore une fois, c'est sujet à modifications. Réfère-toi à la constante présente dans le code Arduino.
+
+Contexte sur le groupe et la matière :
+
+Nous sommes le groupe 14 du deuxième projet d'ingénierie (P2) de première année de cycle préparatoire (CPI-1A, Cycle Préparatoire Intégré 1ère Année) de l'UM6P-EMINES, de la promotion "Class 2030" (pas "Class of 2030", pas "Classe 2030"). Le groupe est composé de :
+- Samy Youssoufine.
+- Soufiane Bourghel.
+- Riham Boughrara.
+- Rita Tamma.
+Notre groupe fait partie de l'équipe de la classe qui s'occupe de l'élaboration d'un système cartésien utilisant un vis-écrou pour le déplacement selon Z (l'autre équipe utilisant un système pignon-crémaillère).
+
+RESSOURCES FOURNIES ET DIRECTIVES D'EXPLOITATION :
+
+* Fichier source : SYSTEME_CARTESIEN.ino
+    * Rôle : Vérité absolue (Single Source of Truth) concernant la logique du micrologiciel.
+    * Utilisation requise : À analyser impérativement pour extraire la syntaxe exacte du protocole de communication série (format des commandes acceptées) et pour sourcer les constantes matérielles structurelles (limites des axes, résolution par pas, etc.).
+
+* Fichiers visuels : PAGE_1.png et PAGE_2.png
+    * Rôle de PAGE_1.png : Maquette de référence illustrant l'architecture et l'esthétique de la page principale de l'interface.
+    * Rôle de PAGE_2.png : Maquette de référence pour l'interface de commande, avec un focus spécifique sur la disposition de l'onglet "Automatique".
+    * Directive de conception : Ces rendus sont des lignes directrices d'intention conceptuelle. Une reproduction au pixel près n'est pas exigée. L'objectif est d'extraire la hiérarchie de l'information et l'identité visuelle, tout en produisant un code HTML/CSS adaptatif et techniquement supérieur.
+
+INSTRUCTIONS DE DÉVELOPPEMENT :
+
+PARTIE TECHNIQUE (Architecture et Logique Métier) :
+- Stack Technologique : L'interface graphique doit être développée strictement en HTML5, CSS3 et JavaScript Vanilla (statique, sans framework lourd type React/Vue).
+- Protocole de Communication : L'interface doit se connecter à l'Arduino Mega exclusivement via l'API WebSerial native du navigateur.
+- Génération Automatique de l'Axe Z : Le code JavaScript doit générer de manière autonome les commandes de l'axe vertical. Lors de la transition d'un chemin SVG (Path) à un autre, le JS doit insérer une consigne de levée (`Z_UP`), exécuter un déplacement rapide vers le point initial du nouveau chemin, puis insérer une consigne de descente (`Z_DOWN`).
+- Optimisation du Routage : Implémenter un algorithme d'optimisation de type "plus proche voisin" (Nearest Neighbor) pour réorganiser l'ordre d'exécution des chemins SVG. L'objectif est de minimiser drastiquement la distance parcourue avec le stylo levé (Pen Up) et de réduire le temps total d'usinage.
+- Documentation et Déploiement :
+  - Toutes les fonctions JS critiques doivent être documentées via MkDocs.
+  - La documentation doit aussi contenir toutes les variables d'état, l'architecture du projet et la liste des raccourcis clavier.
+  - L'interface et la documentation MkDocs associée seront hébergées sur GitHub Pages.
+  - Rédiger un fichier README.md complet à la racine.
+  - Rédiger un fichier Markdown séparé servant de guide d'installation (dépendances MkDocs, etc.) et de tutoriel de déploiement via GitHub Actions/Pages.
+- Les assets graphiques doivent être stockés dans un dossier assets/ situé dans le dossier principal.
+
+PARTIE SÉCURITÉ ET FIABILITÉ SYSTÈME :
+- Protocole Handshake (Critique) : Pour éviter la saturation du buffer de réception de l'Arduino, l'envoi de données doit être strictement conditionné. Après l'envoi d'une ligne d'instruction (ex: `x100y50v60\n`), le JS doit obligatoirement attendre la réception de la chaîne exacte `OK` depuis l'Arduino avant de libérer la ligne suivante.
+- Interruption Matérielle : Si la console reçoit un message commençant par `LIMIT` (déclenchement physique d'un capteur), l'interface doit instantanément basculer en état d'erreur (ERROR), purger la file d'attente et émettre une alerte sonore.
+- Machine à États : Implémenter un gestionnaire d'états strict (`IDLE`, `HOMING`, `RUNNING`, `ERROR`). Tant que le Homing initial n'a pas été exécuté et validé par l'Arduino, toutes les commandes de déplacement manuel et le lancement d'un tracé doivent être désactivés (visuellement grisés et non cliquables).
+- Asynchronisme (Web Worker) : Le parsing et la discrétisation géométrique d'un fichier SVG lourd peuvent geler le navigateur. Ce traitement mathématique doit impérativement être déporté dans un Web Worker fonctionnant en arrière-plan.
+- Calibrage Spatial :
+  - Fournir une option (case à cocher) pour inverser l'axe Y lors de l'importation du SVG.
+  - Intégrer un sélecteur d'origine physique (Top-Left, Bottom-Left, Center) pour s'adapter à la position de la feuille de papier sur le plateau.
+- Procédure "Calibration Z" : Ajouter un mode spécifique permettant de faire descendre le stylo en mode pas-à-pas (Jog) jusqu'au contact avec le papier. Une fois la position validée par l'utilisateur, l'enregistrer dans le `localStorage` sous la clé `Z_PROBING_ZERO`.
+- Résilience aux Déconnexions : Surveiller l'état du port série. En cas de fermeture inattendue (câble arraché), mettre virtuellement le tracé en pause, sauvegarder l'index du dernier vecteur envoyé avec succès, et afficher un bouton "Reprendre le tracé (Resume)" qui sera actif dès la reconnexion du port.
+- Pre-Flight Checklist : Avant de déverrouiller le bouton "Start" pour un tracé, afficher une modale interactive avec des cases à cocher : "Moteurs sous tension ?", "Stylo monté ?", "Origine dégagée ?". Le bouton ne s'active qu'une fois la checklist complétée.
+- Détection de connectivité : Implémenter un script de surveillance de l'état du réseau (via `navigator.onLine`). Si l'utilisateur lance l'interface sans connexion internet (usage local/hors-ligne) :
+  -- Notification d'avertissement : Envoyer un Toast informatif à l'ouverture précisant que les ressources externes (effets sonores Material Sound et polices distantes) ne seront pas disponibles, tout en garantissant que les fonctionnalités critiques de pilotage WebSerial restent 100% opérationnelles.
+  -- Définir une pile de polices de secours (fallback) sans empattement standard (system-ui, sans-serif) pour le mode hors-ligne.
+  -- Afficher une icône "Mode Hors-ligne" (nuage barré) si Internet est indisponible.
+  -- Prévoir des attributs alt pour remplacer les icones Font-Awesome utilisées.
+
+PARTIE UI/UX (Conception Visuelle et Ergonomie) :
+- Identité Visuelle : Le design global doit être "flat" (plat) avec une simulation de profondeur mécanique. Les boutons possèdent une ombre portée sans flou (entièrement plate). Lors d'un clic (`:active`), le bouton se translate sur son ombre pour simuler un enfoncement physique.
+- Police : Famille Source Sans 3.
+- Palette de Couleurs (à déclarer obligatoirement dans `:root` pour une modularité des thèmes) :
+  - Bleu principal : `#0056b3` (Texte : blanc) | Ombre : `#0d345d`
+  - Gris principal : `#ccc` (Texte : `#333`) | Ombre : `#aaa`
+  - Rouge principal (Alertes/E-Stop) : `#c65050` (Texte : blanc) | Ombre : `#912525`
+  - Éléments graphiques, bordures et texte de corps sur fond clair : `#333`.
+  - Tu dois extrapoler les couleurs manquantes (ex: vert pour le succès, états désactivés) en respectant cette direction artistique.
+- Accessibilité et Raccourcis :
+  - L'interface doit être 100% navigable au clavier (utilisation propre des index de tabulation).
+  - Associer des raccourcis clavier globaux aux actions principales, basés sur la combinaison `Shift + [Lettre]`.
+  - La lettre servant de déclencheur doit être visuellement soulignée dans le nom du bouton de l'interface (ex: <u>H</u>oming).
+- Retour Audio : Intégrer des notifications sonores discrètes via l'API HTML Audio pointant vers la bibliothèque hébergée "Google Material Sound" (pas de fichiers locaux). Un son doux pour le succès, un son sec pour les erreurs.
+- Responsive Design (Mobile-First) : L'interface doit être ergonomique sur écrans tactiles (tablettes/téléphones sous Chrome Android gérant WebSerial). Les textes doivent être lisibles sans zoom et les zones de clic (touch targets) doivent être suffisamment larges.
+- Iconographie : L'utilisation de la bibliothèque FontAwesome est exigée pour les icônes. Il est formellement interdit d'utiliser des emojis dans l'interface ou dans le code source généré.
+
+FONCTIONNALITÉS ATTENDUES ET ARCHITECTURE DES VUES :
+
+A. VUES STATIQUES ET NAVIGATION :
+- Page d'Accueil (Home) : Vue principale affichant le nom du système, la désignation du groupe, et le logo de l'institution (intégrer la balise `<img>` pointant vers le fichier local `logo_emines.png`).
+- Page "Guide" : Tutoriel de démarrage rapide (Quickstart) décrivant le flux de travail, avec un bouton d'action principal redirigeant vers la documentation MkDocs hébergée.
+- Page "À Propos" : Présentation des membres de l'équipe d'ingénierie.
+- Page "Commande" (Interface de pilotage principale) : Divisée en deux onglets/sections (Automatique et Manuel). Les instructions suivantes concernent exclusivement le mode "Automatique".
+
+B. CONTRÔLE AUTOMATIQUE (WORKFLOW DE TRACÉ SVG) :
+
+Étape 1 : Importation et Traitement Mathématique (Discrétisation)
+- Chargement SVG : Bouton d'import de fichier local (`.svg`).
+- Paramètres de Discrétisation (Accessibles à l'utilisateur) :
+  - Erreur cordale (Distance max courbe/segment) : Par défaut à 0.1 mm. Réglable.
+  - Filtrage spatial (Longueur minimale de segment) : Fixé par défaut à 0.2 mm (résolution machine) pour prévenir la saturation du buffer série par des micro-segments inutiles.
+- Aplatissement (Flattening) : Convertir toutes les balises géométriques (`path`, `circle`, `ellipse`, `rect`) en polylignes (séries de coordonnées X,Y) en utilisant une subdivision récursive pure ou une bibliothèque JavaScript dédiée (ex: `flatten-svg`). Si une bibliothèque est utilisée, documenter son installation.
+- Audit de complexité : Calculer et afficher le nombre total de segments générés post-discrétisation. Si ce nombre excède 10 000, afficher une alerte visuelle (Warning) informant du risque de latence sur la liaison série.
+
+Étape 2 : Configuration du Support et Placement
+- Modélisation du papier : Générer un calque de fond rectangulaire (gris très clair) dans la zone de dessin virtuelle, représentant la feuille physique.
+- Sélection du format : Menu déroulant proposant les standards A4 (210x297mm, Portrait/Paysage), A3 (297x420mm) et un format Personnalisé (champs de saisie L x l).
+- Manipulation spatiale : Permettre le positionnement (translation) et le redimensionnement (mise à l'échelle) du tracé SVG discrétisé par rapport à la feuille.
+- Sécurité anti-collision (Software Limits) : Évaluer en temps réel les coordonnées matricielles du tracé positionné. Si les limites du tracé excèdent les dimensions de la feuille sélectionnée OU la constante `MAX_TRAVEL_MM` de la machine, déclencher une alerte : le contour du calque "papier" clignote en rouge et le bouton "Lancer le tracé" est strictement verrouillé.
+
+Étape 3 : Prévisualisation et Monitoring (Jumeau Numérique)
+- Rendu d'analyse : Dans le canvas de prévisualisation, afficher le tracé discrétisé. Placer des marqueurs visuels (petits points de 1 ou 2 pixels) aux extrémités de chaque segment pour permettre à l'opérateur d'évaluer la densité de la discrétisation.
+- Calcul ETA : Dès l'import et le redimensionnement, calculer la distance vectorielle totale du parcours. En fonction de la vitesse de consigne, afficher une estimation du temps de tracé (ETA).
+
+Étape 4 : Exécution et Télémétrie en Temps Réel
+- Séquence de démarrage : Le clic sur "Lancer le tracé" doit automatiquement préfixer la séquence par une commande de Homing absolu (si la machine n'est pas déjà à l'état HOMED).
+- Tracking en direct (Ghosting) : Pendant l'usinage, le rendu d'analyse se transforme. Le tracé global passe en gris clair (fantôme). Au fur et à mesure des retours "OK" de l'Arduino confirmant l'exécution d'un segment, surligner le chemin parcouru en bleu intense pour représenter la position réelle du stylet.
+- Jauge de progression : Afficher une barre de progression dynamique (0 à 100%) couplée à un compte à rebours basé sur l'ETA.
+
+C. CONTRÔLE MANUEL ET RÉALISATION DIRECTE (JOGGING & DRAWING) :
+- Outil de Dessin Intégré : Fournir une zone de dessin (Canvas) permettant à l'utilisateur de tracer des formes géométriques simples manuellement.
+- Gestion des Calques (Mobile-First) : Intégrer un panneau de calques basique pour superposer différentes formes. Le réarrangement de ces calques doit impérativement utiliser une API Drag-and-Drop compatible avec les événements tactiles (Touch Events) pour garantir l'utilisabilité sur terminaux mobiles.
+- Panneau de Jogging (D-Pad) : Implémenter un contrôleur directionnel virtuel pour piloter manuellement la machine.
+  - Axes X/Y : Croix directionnelle.
+  - Axe Z : Boutons explicites "Monter Stylo" (Z_UP) et "Descendre Stylo" (Z_DOWN).
+  - Incréments : Sélecteur de pas avec des valeurs prédéfinies (0.1 mm, 1 mm, 10 mm, 50 mm).
+- Arrêt d'Urgence (E-Stop) : 
+  - Bouton critique, rouge, persistant et toujours visible à l'écran.
+  - Comportement logiciel : Mettre fin immédiatement à l'envoi de commandes, purger (vider) la file d'attente JavaScript, et envoyer le caractère d'interruption défini dans le firmware.
+  - Rendu visuel : Actualiser instantanément le Canvas de prévisualisation pour n'afficher *que* les segments ayant été physiquement tracés avant le déclenchement de l'arrêt, figeant ainsi l'état d'avancement réel.
+
+D. TÉLÉMÉTRIE ET CONFIGURATION SYSTÈME :
+- Console Série Intégrée : Panneau rétractable (latéral ou inférieur) agissant comme un moniteur série.
+  - Affichage détaillé : Lignes TX (envoyées) et RX (reçues), précédées d'un horodatage (timestamp) précis.
+  - Filtres interactifs : Cases à cocher pour n'afficher que "Tout", "Commandes envoyées (TX)", ou "Erreurs".
+  - Nettoyage : Bouton "Clear" pour vider le buffer d'affichage HTML.
+- Modale de Configuration (Settings) : Interface regroupant les constantes dynamiques de la machine :
+  - Enveloppe de travail : X_MAX, Y_MAX, Z_MAX.
+  - Dynamique : Vitesse de déplacement rapide (G0) et Vitesse de tracé (G1).
+  - Coefficient de calibration : Champ numérique multiplicateur (ex: 1.005). Ce facteur doit être appliqué mathématiquement par le JS à toutes les coordonnées X/Y avant leur envoi pour compenser la tension des courroies, évitant ainsi de devoir reflasher l'Arduino.
+- Persistance des Données : Stocker l'intégralité des préférences (Dimensions, Vitesses, Format de papier par défaut, Baud rate, Calibration) dans le `localStorage` du navigateur. Ces valeurs doivent être rechargées et appliquées automatiquement à l'initialisation de la page.
+- Identification Firmware : Lors de l'ouverture du port WebSerial, le système doit se mettre en écoute d'un message d'initialisation de la carte (ex: `PLOTTER EQUIPE VIS ECROU V4.2`). Extraire et afficher cette version de firmware dans le pied de page de l'UI. En cas d'absence de message ou de timeout, afficher la mention "Firmware inconnu".
+
+E. FEEDBACK UTILISATEUR ET ERGONOMIE (UX) :
+- Notifications Éphémères (Toasts) : Implémenter un gestionnaire de notifications non-bloquantes (Toasts).
+  - Succès (Vert/Bleu) : Connexion WebSerial établie, Homing validé par la carte, SVG traité avec succès.
+  - Erreur (Rouge + Audio) : Échec du port série, détection d'une fin de course (LIMIT), ou retour de commande inconnue. Ces événements doivent impérativement déclencher la lecture du fichier audio d'alerte configuré précédemment.
+- Infobulles Contextuelles (Tooltips) : Tous les boutons d'action (Arrêt d'Urgence, Homing, Import, Clear Console) doivent révéler une infobulle au survol (hover) détaillant brièvement l'action matérielle induite et rappelant explicitement le raccourci clavier associé (ex: "Arrêt d'urgence [Shift + S]").
+
+-----
+Crée un nouveau fichier HTML dans le dossier de travail actuel : il s'agit ton dossier de travail principal.
