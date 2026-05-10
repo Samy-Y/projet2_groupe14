@@ -1,6 +1,6 @@
 # Système Cartésien - Interface WebSerial
 
-Ce dépôt contient le code source de l'interface de pilotage hautes performances développée par le **Groupe 14 - Class2030 (UM6P-EMINES)** pour un traceur de plans cartésien CoreXY (H-Bot) avec compliance Z.
+Ce dépôt contient le code source de l'interface de pilotage hautes performances développée par le **Groupe 14 - Class2030 (UM6P-EMINES)** pour un traceur de plans cartésien CoreXY (H-Bot) avec outil selon Z.
 
 L'interface est entièrement construite en HTML5, CSS3, et Vanilla JS. Elle communique avec le micrologiciel Arduino Mega 2560 natif via l'API WebSerial, sans intergiciels (pas de serveur Node.js ou Python entre le navigateur et la carte).
 

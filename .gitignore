@@ -1,1 +1,4 @@
 annexes/
+.venv/
+__pycache__/
+.vscode/

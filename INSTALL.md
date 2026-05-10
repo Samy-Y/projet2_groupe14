@@ -27,6 +27,3 @@ Afin de générer la doc localement avant le push :
 pip install mkdocs mkdocs-material
 mkdocs serve
 ```
-
-### Étape 3 : Compatibilité WebSerial
-Notez que le WebSerial nécessite un contexte sécurisé (HTTPS). GitHub Pages gère le HTTPS nativement, permettant de driver la machine cartésienne directement depuis votre site `https://votre-repo.github.io/`.
