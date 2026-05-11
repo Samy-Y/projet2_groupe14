@@ -2,15 +2,15 @@ const int CLK1=8, EN1=6, CW1=7, LIMIT1=50;
 const int CLK2=5, EN2=3, CW2=4, LIMIT2=52;
 const int CLK3=11, EN3=9, CW3=10, LIMIT3=48;
 
-int   STEPS_PER_REV      = 200;
-int   MM_PER_REV         = 40;
-float MAX_TRAVEL_MM      = 400.0f;
-float MAX_TRAVEL_Z_MM    = 100.0f;
-int   HOMING_HALF_PERIOD = 2000;
-int   RELEASE_STEPS      = 30;
-float ACCEL_RPM_PER_STEP = 0.2f;
-const float MIN_RPM      = 20.0f;
-const bool  VERBOSE      = false;
+int   STEPS_PER_REV      = 200;     // Nombre de pas par révolution du moteur (200 pour un moteur 1.8°)
+int   MM_PER_REV         = 40;      // Rayon*2*PI de la poulie (qui a un rayon de 6.36mm)
+float MAX_TRAVEL_MM      = 400.0f;  // Liée à la portée maximale dans le plan. Doit être <= 400
+float MAX_TRAVEL_Z_MM    = 100.0f;  // Liée à la portée minimale hors plan. Doit être >= 100
+int   HOMING_HALF_PERIOD = 2000;    // Demi-période (donc liée à la vitesse) utilisée pour le homing (en microsecondes)
+int   RELEASE_STEPS      = 30;      // Nombre de pas pour libérer les capteurs avant homing
+float ACCEL_RPM_PER_STEP = 0.2f;    // Accélération de départ en RPM/pas
+const float MIN_RPM      = 45.0f;   // Vitesse de départ V_0
+const bool  VERBOSE      = false;   // Mode débogage
 
 float MM_PER_STEP;
 long  MAX_STEPS;
