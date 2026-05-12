@@ -2,15 +2,16 @@ const int CLK1=8, EN1=6, CW1=7, LIMIT1=50;
 const int CLK2=5, EN2=3, CW2=4, LIMIT2=52;
 const int CLK3=11, EN3=9, CW3=10, LIMIT3=48;
 
-int   STEPS_PER_REV      = 200;     // Nombre de pas par révolution du moteur (200 pour un moteur 1.8°)
-int   MM_PER_REV         = 40;      // Rayon*2*PI de la poulie (qui a un rayon de 6.36mm)
-float MAX_TRAVEL_MM      = 400.0f;  // Liée à la portée maximale dans le plan. Doit être <= 400
-float MAX_TRAVEL_Z_MM    = 100.0f;  // Liée à la portée minimale hors plan. Doit être >= 100
-int   HOMING_HALF_PERIOD = 2000;    // Demi-période (donc liée à la vitesse) utilisée pour le homing (en microsecondes)
-int   RELEASE_STEPS      = 30;      // Nombre de pas pour libérer les capteurs avant homing
-float ACCEL_RPM_PER_STEP = 0.2f;    // Accélération de départ en RPM/pas
-const float MIN_RPM      = 45.0f;   // Vitesse de départ V_0
-const bool  VERBOSE      = false;   // Mode débogage
+int   STEPS_PER_REV      = 200;
+int   MM_PER_REV         = 40;
+float MAX_TRAVEL_MM      = 400.0f;
+float MAX_TRAVEL_Z_MM    = 100.0f;
+int   HOMING_HALF_PERIOD = 2000;
+int   RELEASE_STEPS      = 30;
+float ACCEL_RPM_PER_STEP = 0.2f;
+const float MIN_RPM      = 45.0f;
+const float MAX_RPM      = 120.0f;
+const bool  VERBOSE      = false;
 
 float MM_PER_STEP;
 long  MAX_STEPS;
@@ -72,25 +73,51 @@ void afficherPosition() {
 }
 
 // ═══════════════════════════════ HOMING ══════════════════════════════
-bool homingAxis(int clkPin, int cwPin, int limPin, long safetyLimit) {
-  if (digitalRead(limPin)==LOW) libererCapteur((limPin==LIMIT1)?1:(limPin==LIMIT2)?2:3, HOMING_HALF_PERIOD);
-  digitalWrite(cwPin, LOW);
-  long s=0;
-  while (digitalRead(limPin)==HIGH && s<safetyLimit) {
-    digitalWrite(clkPin,HIGH); delayMicroseconds(HOMING_HALF_PERIOD);
-    digitalWrite(clkPin,LOW);  delayMicroseconds(HOMING_HALF_PERIOD);
+bool homingRectiligne(int limPin, int dirM1, int dirM2, long safetyLimit) {
+  if (digitalRead(limPin) == LOW) {
+    digitalWrite(CW1, !dirM1);
+    digitalWrite(CW2, !dirM2);
+    for(int i = 0; i < RELEASE_STEPS; i++) {
+      digitalWrite(CLK1, HIGH); digitalWrite(CLK2, HIGH);
+      delayMicroseconds(HOMING_HALF_PERIOD);
+      digitalWrite(CLK1, LOW);  digitalWrite(CLK2, LOW);
+      delayMicroseconds(HOMING_HALF_PERIOD);
+    }
+  }
+
+  digitalWrite(CW1, dirM1);
+  digitalWrite(CW2, dirM2);
+  long s = 0;
+  while (digitalRead(limPin) == HIGH && s < safetyLimit) {
+    digitalWrite(CLK1, HIGH); digitalWrite(CLK2, HIGH);
+    delayMicroseconds(HOMING_HALF_PERIOD);
+    digitalWrite(CLK1, LOW);  digitalWrite(CLK2, LOW);
+    delayMicroseconds(HOMING_HALF_PERIOD);
     s++;
   }
+  
   return (s < safetyLimit);
 }
 
 void homing() {
   Serial.println(F("--- Homing XY ---"));
-  if (!homingAxis(CLK1,CW1,LIMIT1,MAX_STEPS*2)) { sendLimit(F("M1")); Serial.println(F("ERREUR: capteur M1 !")); return; }
-  Serial.println(F("M1 zero."));
-  if (!homingAxis(CLK2,CW2,LIMIT2,MAX_STEPS*2)) { sendLimit(F("M2")); Serial.println(F("ERREUR: capteur M2 !")); return; }
-  Serial.println(F("M2 zero."));
-  stepsX=0; stepsY=0;
+  
+  if (!homingRectiligne(LIMIT1, LOW, LOW, MAX_STEPS * 2)) { 
+    sendLimit(F("X")); 
+    Serial.println(F("ERREUR: butee X inaccessible !")); 
+    return; 
+  }
+  Serial.println(F("Axe X zero."));
+  
+  if (!homingRectiligne(LIMIT2, LOW, HIGH, MAX_STEPS * 2)) { 
+    sendLimit(F("Y")); 
+    Serial.println(F("ERREUR: butee Y inaccessible !")); 
+    return; 
+  }
+  Serial.println(F("Axe Y zero."));
+  
+  stepsX = 0; 
+  stepsY = 0;
   Serial.println(F("Origine XY ok."));
   sendOk();
 }
@@ -98,7 +125,29 @@ void homing() {
 void homingZ() {
   Serial.println(F("--- Homing Z ---"));
   long maxStepsZ = (long)round(MAX_TRAVEL_Z_MM/MM_PER_STEP);
-  if (!homingAxis(CLK3,CW3,LIMIT3,maxStepsZ*2)) { sendLimit(F("Z")); Serial.println(F("ERREUR: capteur Z !")); return; }
+  
+  if (digitalRead(LIMIT3) == LOW) {
+    digitalWrite(CW3, HIGH);
+    for(int i = 0; i < RELEASE_STEPS; i++) {
+      digitalWrite(CLK3, HIGH); delayMicroseconds(HOMING_HALF_PERIOD);
+      digitalWrite(CLK3, LOW);  delayMicroseconds(HOMING_HALF_PERIOD);
+    }
+  }
+
+  digitalWrite(CW3, LOW);
+  long s = 0;
+  while (digitalRead(LIMIT3) == HIGH && s < maxStepsZ * 2) {
+    digitalWrite(CLK3, HIGH); delayMicroseconds(HOMING_HALF_PERIOD);
+    digitalWrite(CLK3, LOW);  delayMicroseconds(HOMING_HALF_PERIOD);
+    s++;
+  }
+  
+  if (s >= maxStepsZ * 2) { 
+    sendLimit(F("Z")); 
+    Serial.println(F("ERREUR: capteur Z !")); 
+    return; 
+  }
+  
   stepsZ=0;
   Serial.println(F("Origine Z ok."));
   sendOk();
@@ -106,6 +155,8 @@ void homingZ() {
 
 // ═══════════════════════════════ MOVES ═══════════════════════════════
 void deplacerXY(float dx, float dy, float rpm) {
+  rpm = constrain(rpm, MIN_RPM, MAX_RPM);
+
   long clampX = constrain(stepsX+mmToSteps(dx), 0L, MAX_STEPS);
   long clampY = constrain(stepsY+mmToSteps(dy), 0L, MAX_STEPS);
   long realDX = clampX-stepsX,  realDY = clampY-stepsY;
@@ -126,17 +177,12 @@ void deplacerXY(float dx, float dy, float rpm) {
   long dM1=0, dM2=0;
   long eM1=total/2, eM2=total/2;
 
-  // --- PRE-CALCULS DE LA RAMPE (HORS BOUCLE) ---
-  // Calcul du nombre de pas alloués à l'accélération/décélération
   long rampSteps = (long)constrain((rpm - MIN_RPM) / ACCEL_RPM_PER_STEP, 1.0f, (float)(total / 2));
-  
-  // Calcul des bornes de délai en microsecondes (Demi-périodes)
-  unsigned long minDelay = (unsigned long)(30000000.0f / (rpm * STEPS_PER_REV));      // Vitesse cible
-  unsigned long maxDelay = (unsigned long)(30000000.0f / (MIN_RPM * STEPS_PER_REV));  // Vitesse de départ
+  unsigned long minDelay = (unsigned long)(30000000.0f / (rpm * STEPS_PER_REV));
+  unsigned long maxDelay = (unsigned long)(30000000.0f / (MIN_RPM * STEPS_PER_REV));
   unsigned long delayRange = maxDelay - minDelay;
 
   for (long i=0; i<total; i++) {
-    // Écoute série non bloquante (uniquement lecture)
     if (Serial.available() && (Serial.peek()=='a'||Serial.peek()=='A')) {
       Serial.read();
       long s1=dir1?dM1:-dM1, s2=dir2?dM2:-dM2;
@@ -152,7 +198,6 @@ void deplacerXY(float dx, float dy, float rpm) {
       Serial.println(F("\n!!! FIN DE COURSE XY !!!")); afficherPosition(); return;
     }
 
-    // --- CALCUL DU DELAI EN ARITHMETIQUE ENTIERE ---
     unsigned long currentHP;
     if (i < rampSteps) {
       currentHP = maxDelay - ((delayRange * i) / rampSteps);
@@ -165,12 +210,10 @@ void deplacerXY(float dx, float dy, float rpm) {
       currentHP = minDelay;
     }
 
-    // --- LOGIQUE SPATIALE DDA ---
     byte mask=0;
     eM1+=absM1; if(eM1>=total){mask|=0x01; eM1-=total; dM1++;}
     eM2+=absM2; if(eM2>=total){mask|=0x02; eM2-=total; dM2++;}
     
-    // Déclenchement matériel
     if (mask) stepMotors(mask, currentHP);
   }
   stepsX=clampX; stepsY=clampY;
@@ -179,6 +222,8 @@ void deplacerXY(float dx, float dy, float rpm) {
 }
 
 void deplacerZ(float dz, float rpm) {
+  rpm = constrain(rpm, MIN_RPM, MAX_RPM);
+  
   long maxStepsZ = (long)round(MAX_TRAVEL_Z_MM/MM_PER_STEP);
   long clampZ    = constrain(stepsZ+mmToSteps(dz), 0L, maxStepsZ);
   long realDZ    = clampZ-stepsZ;
@@ -207,7 +252,6 @@ void deplacerZ(float dz, float rpm) {
     digitalWrite(CLK3,HIGH); delayMicroseconds(hp);
     digitalWrite(CLK3,LOW);  delayMicroseconds(hp);
     dZ++;
-    // if (VERBOSE && i%50==0) Serial.print(F("."));
   }
   stepsZ=clampZ;
   Serial.println(F("\nTermine.")); afficherPosition();
@@ -259,7 +303,7 @@ void editerParametres() {
 
 // ═══════════════════════════════ SETUP / LOOP ════════════════════════
 void setup() {
-  Serial.begin(115200); // nécessaire pour éviter les blocages dus à la saturation/remplissage du buffer série
+  Serial.begin(115200);
   recalculerDerives();
   for (int p : (int[]){CLK1,EN1,CW1,CLK2,EN2,CW2,CLK3,EN3,CW3}) pinMode(p,OUTPUT);
   for (int p : (int[]){LIMIT1,LIMIT2,LIMIT3}) pinMode(p,INPUT_PULLUP);
@@ -288,7 +332,7 @@ void loop() {
     int v=inp.indexOf('v');
     if (v==-1){Serial.println(F("Ex: z30v60")); sendErr(); return;}
     float dz=inp.substring(1,v).toFloat(), rpm=inp.substring(v+1).toFloat();
-    if(rpm<=0||dz==0){Serial.println(F("Valeur invalide.")); sendErr(); return;}
+    if(dz==0){Serial.println(F("Valeur invalide.")); sendErr(); return;}
     deplacerZ(dz,rpm); return;
   }
 
@@ -298,6 +342,6 @@ void loop() {
   if (xi!=-1) dx=inp.substring(xi+1,(yi!=-1&&yi>xi)?yi:vi).toFloat();
   if (yi!=-1) dy=inp.substring(yi+1,vi).toFloat();
   float rpm=inp.substring(vi+1).toFloat();
-  if(rpm<=0||( dx==0&&dy==0)){Serial.println(F("Valeur invalide.")); sendErr(); return;}
+  if(dx==0&&dy==0){Serial.println(F("Valeur invalide.")); sendErr(); return;}
   deplacerXY(dx,dy,rpm);
 }

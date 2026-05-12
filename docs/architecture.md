@@ -36,15 +36,33 @@ L'interface repose sur un mini-state machine pour gérer les transitions sans am
 
 Ce modèle réduit les erreurs d'interaction (ex: démarrer avant chargement) et facilite l'affichage d'états visuels cohérents.
 
-## Pipeline SVG (UI)
+## Architecture de Conversion SVG et Discrétisation
 
-1. L'utilisateur charge un fichier `.svg`.
-2. `app.js` lit le fichier, l'envoie au `worker.js`.
-3. Le worker parse les nœuds graphiques et transforme chaque courbe en polylignes.
-4. Le worker renvoie un tableau de polylignes sérialisées.
-5. `app.js` met à jour l'aperçu et le compteur de segments.
+Le traitement d'un fichier SVG vers un système matériel requiert une transformation d'un format vectoriel descriptif complexe vers de simples déplacements linaires (polylignes). Pour ne pas geler le navigateur (à 60fps), cette tâche lourde de calcul géométrique est isolée dans un thread parallèle via Web Worker (`worker.js`).
 
-Ce découplage évite les gels du navigateur quand des SVG complexes sont chargés.
+### 1. Extraction et Parsing
+Le script parcourt et extrait toutes les primitives géométriques (`<path>`, `<line>`, `<rect>`, `<polygon>`, `<polyline>`). 
+L'axe Y peut être mathématiquement inversé lors de l'extraction (`invertY`) pour respecter le sens de fonctionnement réel du portique CoreXY.
+
+### 2. Discrétisation des courbes (Flattening)
+Le microcontrôleur Arduino utilise un algorithme DDA pour tracer des lignes strictes. L'UI doit alors s'occuper "d'aplatir" les courbes (Bézier Cubique : `C`, `c` dans le SVG).
+L'algorithme utilise une évaluation paramétrique discrète :
+$$ P(t) = (1-t)^3 P_0 + 3(1-t)^2 t P_1 + 3(1-t) t^2 P_2 + t^3 P_3 $$
+avec $t \in [0, 1]$. La courbe est fragmentée en sous-segments linéaires d'une résolution suffisante (`numSegments`) pour être lue fluidement physiquement.
+
+### 3. Optimisation Graphe (Nearest Neighbor)
+Générer et envoyer la trajectoire brute d'un fichier `.svg` provoque souvent des allers-retours frénétiques dans les airs (stylo levé), usant la mécanique. 
+À travers la fonction `optimizePathOrder()`, le Worker implémente une approximation du "Voyageur de commerce" (TSP) en *Nearest Neighbor* (plus proche voisin) :
+- On part d'un point initial en `[0, 0]`.
+- On calcule la distance euclidienne euclidienne ($\sqrt{\Delta x^2 + \Delta y^2}$) vers tous les points finaux et initiaux de toutes les polylignes non visitées.
+- La polyligne est insérée dans la queue finale (et le tableau est inversé en mémoire si son point de sortie était plus proche que son point d'entrée de la position de notre tête virtuelle).
+- Le cycle se répète jusqu'à l'assèchement local complet du tracé.
+
+### 4. Scaling UI et Calcul des Deltas
+En fin de session, des structures de points (`Array<{x, y}>`) arrivent sur le fil principal JS.
+De là, l'interface prend le contrôle en temps réel lors du rendu ou de l'envoi :
+1. Application d'une matrice affine (Scale/Offset).
+2. Conversion de l'absolue en Deltas (`curX - startX`) avant acheminement à l'Arduino au format respecté de l'API (ex: `x100y-5v50`).
 
 ## Rendu d'aperçu
 
@@ -71,15 +89,6 @@ Chaque contrôle déclenche un **redraw** immédiat du canvas, garantissant un f
 Le canvas change de style (bord rouge) si un segment dépasse la zone définie. Cette alerte visuelle évite les sorties de course avant même le lancement.
 
 Le système privilégie le **feedback immédiat** plutôt que les avertissements bloquants, pour conserver un flux utilisateur fluide.
-
-## Concurrence d'exécution
-
-La logique lourde (parsing SVG) est isolée dans un Web Worker. Les messages échangés sont réduits au strict nécessaire :
-
-- In : texte SVG brut.
-- Out : polylignes compactes (tableaux de points).
-
-Cette stratégie limite les échanges volumineux et garantit un rendu stable, même pour des SVG volumineux.
 
 ## Principes de lisibilité
 

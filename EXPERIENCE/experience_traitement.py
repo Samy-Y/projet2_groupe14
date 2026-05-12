@@ -1,76 +1,74 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
-# Configuration des fichiers
-files = {
-    'Moteur 1 (XY-G)': 'annexes/res_M1.csv',
-    'Moteur 2 (XY-D)': 'annexes/res_M2.csv'
-}
+# Configuration pour export PGF natif LaTeX
+import matplotlib
+matplotlib.use("pgf")
+matplotlib.rcParams.update({
+    "pgf.texsystem": "xelatex",
+    "font.family": "sans-serif",
+    "text.usetex": True,
+    "pgf.rcfonts": False,
+    "axes.labelsize": 10,
+    "font.size": 10,
+    "legend.fontsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+})
 
-def analyser_vibrations(file_dict):
-    plt.figure(figsize=(14, 8))
+def generer_histogramme_pgf():
+    chemin_csv = 'experience/res_globaux.csv'
+    chemin_pgf = 'experience/histogramme_vibrations.pgf'
     
-    colors = ['#c65050', '#0056b3'] # Rouge pour M1, Bleu pour M2
-    width = 2.0  
-    results = {}
+    if not os.path.exists(chemin_csv):
+        print(f"Erreur : Le fichier {chemin_csv} est introuvable.")
+        return
 
-    for i, (label, path) in enumerate(file_dict.items()):
-        try:
-            # Chargement des données
-            df = pd.read_csv(path)
-            # Calcul de l'accélération nette (écart à la gravité)
-            df['Net'] = np.abs(df['Magnitude'] - 9.81)
-            
-            # --- IDENTIFICATION DU MINIMUM ---
-            idx_min = df['Net'].idxmin()
-            min_rpm = df.loc[idx_min, 'RPM']
-            min_val = df.loc[idx_min, 'Net']
-            results[label] = (min_rpm, min_val)
-            
-            # Tracé de l'histogramme
-            offset = -width/2 if i == 0 else width/2
-            plt.bar(df['RPM'] + offset, df['Net'], 
-                    width=width, label=label, color=colors[i], 
-                    alpha=0.6, edgecolor='black', linewidth=0.5)
-            
-            # --- MARQUAGE SUR LE GRAPHIQUE ---
-            # Point jaune pour le minimum
-            plt.scatter(min_rpm + offset, min_val, color='yellow', edgecolor='black', 
-                        s=120, zorder=5, label=f"Point stable {label}")
-            
-            # Bulle d'annotation
-            plt.annotate(f"Min: {min_val:.2f} m/s²\nà {min_rpm} RPM", 
-                         xy=(min_rpm + offset, min_val),
-                         xytext=(0, 15), textcoords='offset points',
-                         ha='center', fontsize=10, fontweight='bold',
-                         bbox=dict(boxstyle='round,pad=0.3', fc='white', ec=colors[i], alpha=0.9))
+    # Chargement et calculs
+    df = pd.read_csv(chemin_csv)
+    df['Net'] = np.abs(df['Magnitude'] - 9.81)
 
-        except Exception as e:
-            print(f"Erreur sur {path}: {e}")
-
-    # --- AFFICHAGE CONSOLE ---
-    print("\n" + "="*40)
-    print(" SYNTHÈSE DES MINIMUMS D'ACCÉLÉRATION")
-    print("="*40)
-    for motor, (rpm, val) in results.items():
-        print(f"-> {motor} : {val:.4f} m/s² à {rpm} RPM")
-    print("="*40)
-
-    # Mise en forme du graphique
-    plt.title("Analyse des Minimums Vibratoires pour le choix de Vmin", fontsize=14, fontweight='bold')
-    plt.xlabel("Vitesse de rotation (RPM)", fontweight='bold')
-    plt.ylabel("Accélération Nette |a - g| (m/s²)", fontweight='bold')
+    fig, ax = plt.subplots(figsize=(6.5, 4))
     
-    # Zone critique 10-100 RPM
-    plt.axvspan(10, 100, color='red', alpha=0.05, label='Zone de résonance critique')
+    # Tracé de l'histogramme complet
+    ax.bar(df['RPM'], df['Net'], width=1.5, color='#0056b3', alpha=0.8, edgecolor='black', linewidth=0.3)
     
-    plt.grid(axis='y', linestyle=':', alpha=0.6)
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    # Identification des zones
+    # 1. Zone chaotique (Sauts de pas : 80-115 RPM)
+    ax.axvspan(80, 115, color='#c65050', alpha=0.2, label=r'Zone chaotique (Perte de pas)')
+    
+    # 2. Zone Hors CdCf (Stable mais > 80 mm/s : 120-150 RPM)
+    ax.axvspan(120, 150, color='#2ca02c', alpha=0.2, hatch='//', label=r'Zone stable (Hors CdCf $> 80$ mm/s)')
+    
+    # 3. Zone de travail valide [0-120 RPM] - Implicite, mais on cherche le min avant 80 RPM
+    zone_valide = df[df['RPM'] < 80]
+    idx_min = zone_valide['Net'].idxmin()
+    min_rpm = zone_valide.loc[idx_min, 'RPM']
+    min_val = zone_valide.loc[idx_min, 'Net']
+    
+    # Marquage du minimum global dans la zone utile
+    ax.scatter(min_rpm, min_val, color='gold', edgecolor='black', s=50, zorder=5)
+    ax.annotate(rf'$V_{{min}}$ idéal ({min_rpm} RPM)', 
+                xy=(min_rpm, min_val), xytext=(0, 15), textcoords='offset points',
+                ha='center', fontsize=8, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.8))
+
+    # Mise en forme
+    ax.set_title(r"Caractérisation vibratoire globale du moteur NEMA 17")
+    ax.set_xlabel(r"Vitesse de consigne (RPM)")
+    ax.set_ylabel(r"Accélération nette $|a - g|$ (m/s$^2$)")
+    
+    # Ligne verticale pour la limite du CdCf
+    ax.axvline(x=120, color='black', linestyle='--', linewidth=1, label=r'Limite CdCf ($V_{max} = 80$ mm/s)')
+    
+    ax.grid(axis='y', linestyle=':', alpha=0.6)
+    ax.legend(loc='upper right')
+    
     plt.tight_layout()
-    
-    plt.savefig('analyse_minimums_vibration.png')
-    plt.show()
+    plt.savefig(chemin_pgf)
+    print(f"Graphique exporté avec succès vers {chemin_pgf}")
 
 if __name__ == "__main__":
-    analyser_vibrations(files)
+    generer_histogramme_pgf()

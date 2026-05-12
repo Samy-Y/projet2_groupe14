@@ -1,23 +1,5 @@
-**Bienvenue dans la documentation du traceur CoreXY Web-Piloté !**
+# Documentation de l'interface du traceur cartésien
 
-Ce projet (Group 14 Class2030) offre une interface web native interagissant directement avec un châssis Arduino grâce à l'API **WebSerial**.
+Ce dépôt contient la documentation complète de l'interface de pilotage du traceur cartésien développé par le **Groupe 14 - Class2030 (UM6P-EMINES)**. Vous y trouverez des guides d'installation, des détails sur l'API de communication WebSerial, ainsi que des explications sur les algorithmes utilisés pour le contrôle du traceur.
 
-## Lancer l'interface locale
-
-Pour outrepasser les règles de sécurité CORS (particulièrement pour les Web Workers), au lieu d'ouvrir directement `index.html`, servez le projet avec Python :
-
-```bash
-python -m http.server 8000
-```
-Puis rendez-vous sur `http://localhost:8000` depuis un navigateur récent (Chrome, Edge, Opera) supportant WebSerial.
-
-## Configuration Moteur (Arduino)
-
-1. Flashez le fichier `SYSTEME_CARTESIEN.ino` fourni sur votre Arduino.
-2. Assurez-vous des câblages des drivers A4988/DRV8825.
-3. Branchez votre port USB.
-4. Sur l'interface Web, cliquez sur "Se Connecter".
-
-## Options de placement et d'échelle SVG
-
-Dans l'application, l'onglet "Support" permet de configurer le mode d'échelle (`Scale (%)`), ainsi que les décalages (X/Y) directement avant de lancer l'impression. Le Worker calculera dynamiquement toutes les géométries (y compris les courbes) et transmettra les segments vectorisés vers votre châssis.
+**Cette documentation est dédiée uniquement à l'interface.**

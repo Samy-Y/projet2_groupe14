@@ -21,4 +21,4 @@ L'interface est entièrement construite en HTML5, CSS3, et Vanilla JS. Elle comm
 - Riham Boughrara
 - Rita Tamma
 
-*Projet P2 - Première année cycle préparatoire intégré (CPI-1A).*
+*Projet 2 (CPI-1A).*

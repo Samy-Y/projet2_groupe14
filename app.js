@@ -36,6 +36,7 @@ let paperW = 210, paperH = 297;
 
 // Worker
 let worker = null;
+let currentSvgContent = null; 
 
 // Audio Context (pour fallbacks internes sans internet)
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -88,6 +89,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Auto Mode 
     document.getElementById('svg-file').addEventListener('change', handleSvgUpload);
+    document.getElementById('invert-y').addEventListener('change', reparseSVG);
+    document.getElementById('chordal-error').addEventListener('change', reparseSVG);
     document.getElementById('btn-start-auto').addEventListener('click', startPlotting);
     
     // Placement Controls
@@ -99,6 +102,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('offset-x').addEventListener('input', (e) => { offsetX = parseFloat(e.target.value) || 0; drawPreviewCanvas(); });
     document.getElementById('offset-y').addEventListener('input', (e) => { offsetY = parseFloat(e.target.value) || 0; drawPreviewCanvas(); });
+
+    // Drag Canvas
+    initCanvasDrag();
 
     // Manual
     document.getElementById('btn-homing').addEventListener('click', () => queueCommand('i'));
@@ -112,8 +118,19 @@ document.addEventListener('DOMContentLoaded', () => {
             queueCommand(`${axis.toLowerCase()}${val}v${rpm}`);
         });
     });
-    document.getElementById('btn-z-up').addEventListener('click', () => queueCommand(`z${loadSettings().zup}v${loadSettings().vfast}`));
-    document.getElementById('btn-z-down').addEventListener('click', () => queueCommand(`z${loadSettings().zdown}v${loadSettings().vfast}`));
+    
+    // Suivi basique pour manuel (approximation)
+    let isZUp = true;
+    document.getElementById('btn-z-up').addEventListener('click', () => {
+        let dz = isZUp ? 0 : loadSettings().zup;
+        if(dz !== 0) queueCommand(`z${dz}v${loadSettings().vfast}`);
+        isZUp = true;
+    });
+    document.getElementById('btn-z-down').addEventListener('click', () => {
+        let dz = isZUp ? -loadSettings().zup : 0;
+        if(dz !== 0) queueCommand(`z${dz}v${loadSettings().vfast}`);
+        isZUp = false;
+    });
 
     updateUIState();
 });
@@ -142,6 +159,54 @@ function initNavigation() {
             btn.classList.add('active');
             document.getElementById(btn.dataset.target).classList.remove('hidden');
         });
+    });
+}
+
+function initCanvasDrag() {
+    const canvas = document.getElementById('preview-canvas');
+    let isDragging = false;
+    let startMouseX = 0, startMouseY = 0;
+    let startOffsetX = 0, startOffsetY = 0;
+
+    canvas.style.cursor = 'grab';
+
+    canvas.addEventListener('mousedown', (e) => {
+        if(svgPolylines.length === 0) return;
+        isDragging = true;
+        canvas.style.cursor = 'grabbing';
+        let rect = canvas.getBoundingClientRect();
+        startMouseX = e.clientX - rect.left;
+        startMouseY = e.clientY - rect.top;
+        startOffsetX = offsetX;
+        startOffsetY = offsetY;
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if(!isDragging) return;
+        let rect = canvas.getBoundingClientRect();
+        let currentMouseX = e.clientX - rect.left;
+        let currentMouseY = e.clientY - rect.top;
+
+        let s = loadSettings();
+        // Ratio pixel / mm physique
+        let mmPerPxX = s.xmax / canvas.width;
+        let mmPerPxY = s.ymax / canvas.height;
+
+        let deltaX = (currentMouseX - startMouseX) * mmPerPxX;
+        let deltaY = (currentMouseY - startMouseY) * mmPerPxY;
+
+        offsetX = startOffsetX + deltaX;
+        offsetY = startOffsetY + deltaY;
+
+        document.getElementById('offset-x').value = offsetX.toFixed(1);
+        document.getElementById('offset-y').value = offsetY.toFixed(1);
+
+        drawPreviewCanvas();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'grab';
     });
 }
 
@@ -420,6 +485,18 @@ function initWebWorker() {
     }
 }
 
+function reparseSVG() {
+    if(!currentSvgContent) return;
+    const chordal = parseFloat(document.getElementById('chordal-error').value);
+    const invertY = document.getElementById('invert-y').checked;
+    worker.postMessage({
+        type: 'parse',
+        svgContent: currentSvgContent,
+        chordalError: chordal,
+        invertY: invertY
+    });
+}
+
 function handleSvgUpload(e) {
     const file = e.target.files[0];
     if(!file) return;
@@ -427,14 +504,8 @@ function handleSvgUpload(e) {
     
     const reader = new FileReader();
     reader.onload = function(evt) {
-        const chordal = parseFloat(document.getElementById('chordal-error').value);
-        const invertY = document.getElementById('invert-y').checked;
-        worker.postMessage({
-            type: 'parse',
-            svgContent: evt.target.result,
-            chordalError: chordal,
-            invertY: invertY
-        });
+        currentSvgContent = evt.target.result;
+        reparseSVG();
     };
     reader.readAsText(file);
 }
@@ -470,6 +541,10 @@ function drawPreviewCanvas() {
     ctx.lineWidth = 1;
     
     let isOutOfBounds = false;
+    let totalDrawDistance = 0;
+    let totalTravelDistance = 0;
+    
+    let lastPenX = 0, lastPenY = 0; // virtuel pour l'ETA
 
     svgPolylines.forEach(poly => {
         ctx.beginPath();
@@ -481,8 +556,16 @@ function drawPreviewCanvas() {
 
             let cx = (x / s.xmax) * canvas.width;
             let cy = (y / s.ymax) * canvas.height;
-            if(i===0) ctx.moveTo(cx, cy);
-            else ctx.lineTo(cx, cy);
+            if(i===0) {
+                ctx.moveTo(cx, cy);
+                totalTravelDistance += Math.hypot(x - lastPenX, y - lastPenY);
+            }
+            else {
+                ctx.lineTo(cx, cy);
+                totalDrawDistance += Math.hypot(x - lastPenX, y - lastPenY);
+            }
+            lastPenX = x;
+            lastPenY = y;
         }
         ctx.stroke();
     });
@@ -495,6 +578,20 @@ function drawPreviewCanvas() {
         wrapper.style.borderColor = '#ccc';
         wrapper.style.boxShadow = 'none';
     }
+    
+    // Calcul ETA (Heuristique basée sur la vitesse en mm/min via RPM et MM_PER_REV=40 du C++)
+    // En réalité s.vdraw est un RPM. MM/min = RPM * 40.
+    let speedDrawMmMin = s.vdraw * 40; 
+    let speedTravelMmMin = s.vfast * 40;
+    if(speedDrawMmMin > 0 && speedTravelMmMin > 0) {
+        let maxZTime = svgPolylines.length * 2 * (10 / (s.vfast*40)) * 60; // Approximons 10mm voyage Z en secondes
+        let timeSecs = (totalDrawDistance / speedDrawMmMin)*60 + (totalTravelDistance / speedTravelMmMin)*60 + maxZTime;
+        let mins = Math.floor(timeSecs / 60);
+        let secs = Math.floor(timeSecs % 60);
+        document.getElementById('stat-eta').innerText = `~${mins}m ${secs}s`;
+    } else {
+        document.getElementById('stat-eta').innerText = "--:--";
+    }
 }
 
 function startPlotting() {
@@ -503,23 +600,45 @@ function startPlotting() {
     
     const s = loadSettings();
     
+    // Suivi de la position (Tête virtuelle)
+    let curX = 0;
+    let curY = 0;
+    
     // Injection
-    queueCommand('i'); // Homing initial
-    queueCommand(`z${s.zup}v${s.vfast}`); // Monte le stylo
+    queueCommand('i'); // Homing initial (Ramène matériellement et virtuellement à 0,0)
+    queueCommand(`z${s.zup}v${s.vfast}`); // Monte le stylo (Postulat: Z=0 après Homing Z, on monte).
     
     svgPolylines.forEach((poly, index) => {
         // Move to start of polyline
         let startX = (poly[0].x * scaleFactor + offsetX) * s.calib;
         let startY = (poly[0].y * scaleFactor + offsetY) * s.calib;
-        queueCommand(`x${startX.toFixed(2)}y${startY.toFixed(2)}v${s.vfast}`);
+        
+        // Calcul du Delta
+        let dx = startX - curX;
+        let dy = startY - curY;
+        
+        if (dx !== 0 || dy !== 0) {
+            queueCommand(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${s.vfast}`);
+            curX = startX;
+            curY = startY;
+        }
+
         // Pen Down
-        queueCommand(`z${s.zdown}v${s.vfast}`);
+        queueCommand(`z-${s.zup}v${s.vfast}`);
+        
         // Draw
         for(let i=1; i<poly.length; i++) {
-            let x = (poly[i].x * scaleFactor + offsetX) * s.calib;
-            let y = (poly[i].y * scaleFactor + offsetY) * s.calib;
-            queueCommand(`x${x.toFixed(2)}y${y.toFixed(2)}v${s.vdraw}`);
+            let nextX = (poly[i].x * scaleFactor + offsetX) * s.calib;
+            let nextY = (poly[i].y * scaleFactor + offsetY) * s.calib;
+            
+            let ddx = nextX - curX;
+            let ddy = nextY - curY;
+            
+            queueCommand(`x${ddx.toFixed(2)}y${ddy.toFixed(2)}v${s.vdraw}`);
+            curX = nextX;
+            curY = nextY;
         }
+        
         // Pen Up
         queueCommand(`z${s.zup}v${s.vfast}`);
     });

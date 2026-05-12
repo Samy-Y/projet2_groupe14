@@ -114,11 +114,12 @@
                             <div class="placement-controls mt-2">
                                 <label>Échelle : <input type="range" id="scale-slider" min="10" max="500" value="100"> <span id="scale-val">100%</span></label>
                                 <div class="form-group">
-                                    <label>Offset X (mm) :</label> <input type="number" id="offset-x" value="0">
+                                    <label>Offset X (mm) :</label> <input type="number" id="offset-x" value="0" step="1">
                                 </div>
                                 <div class="form-group">
-                                    <label>Offset Y (mm) :</label> <input type="number" id="offset-y" value="0">
+                                    <label>Offset Y (mm) :</label> <input type="number" id="offset-y" value="0" step="1">
                                 </div>
+                                <small class="text-muted"><i class="fas fa-mouse-pointer"></i> Astuce: Glissez-déposez l'aperçu pour déplacer le SVG visuellement.</small>
                             </div>
 
                             <div class="canvas-container mt-2" id="preview-wrapper">

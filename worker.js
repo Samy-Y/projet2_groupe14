@@ -8,7 +8,7 @@ self.onmessage = function(e) {
     const { type, svgContent, chordalError, invertY } = e.data;
     
     if (type === 'parse') {
-        const polylines = parseSVG(svgContent, invertY);
+        const polylines = parseSVG(svgContent, invertY, chordalError);
         let segmentsCount = 0;
         polylines.forEach(p => segmentsCount += p.length - 1);
         
@@ -20,7 +20,7 @@ self.onmessage = function(e) {
     }
 };
 
-function parseSVG(svgString, invertY) {
+function parseSVG(svgString, invertY, chordalError) {
     let polylines = [];
     
     // Helper function pour extraire les attributs
@@ -34,7 +34,7 @@ function parseSVG(svgString, invertY) {
     const regexPath = /<path[^>]*d="([^"]*)"/g;
     let match;
     while ((match = regexPath.exec(svgString)) !== null) {
-        let poly = convertPathToPolyline(match[1]);
+        let poly = convertPathToPolyline(match[1], chordalError);
         if(invertY) poly = poly.map(pt => ({ x: pt.x, y: -pt.y }));
         if(poly.length > 1) polylines.push(poly);
     }
@@ -92,7 +92,7 @@ function parseSVG(svgString, invertY) {
     return optimizePathOrder(polylines);
 }
 
-function convertPathToPolyline(dString) {
+function convertPathToPolyline(dString, chordalError = 0.1) {
     let pts = [];
     // Un vrai parser SVG est complexe, mais nous utilisons une approche simplifiée 
     // qui éclate la chaîne sur les commandes et gère l'interpolation de courbes de Bézier.
@@ -100,8 +100,12 @@ function convertPathToPolyline(dString) {
     let match;
     let currX = 0, currY = 0;
     
-    // Discretisation resolution
-    const numSegments = 10; 
+    // Convert chordal error to a segment count (heuristic approximation):
+    // Plus l'erreur est petite, plus numSegments est grand.
+    // Base: chordal 0.1 => 10 segments, 1.0 => 3 segments, 0.01 => ~30 segments.
+    // L'utilisateur peut ainsi fortement dégrader la courbe pour tester.
+    let numSegments = Math.max(1, Math.min(100, Math.round(1 / chordalError))); 
+    if (isNaN(numSegments)) numSegments = 10;
     
     while ((match = commandsRegex.exec(dString)) !== null) {
         let type = match[1];
