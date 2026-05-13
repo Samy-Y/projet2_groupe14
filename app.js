@@ -36,7 +36,14 @@ let paperW = 210, paperH = 297;
 
 // Worker
 let worker = null;
-let currentSvgContent = null; 
+let currentSvgContent = null;
+
+// Jumeau Numérique (Digital Twin)
+let commandMap = [];      // Entrée par commande : { type, draws, polylineIdx, pointIdx }
+let okCount = 0;          // Nb de OK reçus depuis début du tracé
+let plotStartTime = null; // Timestamp démarrage tracé
+let simulationTimer = null; // Timer simulation
+let animFrameId = null;   // ID requestAnimationFrame (tête pulsante)
 
 // Audio Context (pour fallbacks internes sans internet)
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -91,7 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('svg-file').addEventListener('change', handleSvgUpload);
     document.getElementById('invert-y').addEventListener('change', reparseSVG);
     document.getElementById('chordal-error').addEventListener('change', reparseSVG);
-    document.getElementById('btn-start-auto').addEventListener('click', startPlotting);
+    document.getElementById('btn-start-auto').addEventListener('click', () => startPlotting(false));
+    document.getElementById('btn-simulate').addEventListener('click', () => startPlotting(true));
     
     // Placement Controls
     document.getElementById('paper-format').addEventListener('change', handlePaperChange);
@@ -385,7 +393,10 @@ function handleHardwareResponse(line) {
     
     if(line === "OK") {
         waitingForOk = false;
-        processQueue(); // Send next
+        if(currentState === SystemState.RUNNING && commandMap.length > 0) {
+            onOkReceived();
+        }
+        processQueue();
     } else if (line.indexOf("LIMIT") === 0) {
         triggerEStop(line);
     } else if (line.indexOf("===") === 0) {
@@ -427,16 +438,29 @@ function changeState(newState) {
     const badge = document.getElementById('machine-state');
     badge.innerText = currentState;
     badge.style.background = 
-        currentState === 'ERROR' ? '#c65050' : 
+        currentState === 'ERROR'   ? '#c65050' : 
         currentState === 'RUNNING' ? '#2e8b57' : 
-        currentState === 'HOMING' ? '#0056b3' : '#eee';
+        currentState === 'HOMING'  ? '#0056b3' : '#eee';
     badge.style.color = currentState === 'IDLE' ? '#333' : '#fff';
+    
+    // Réinitialise le jumeau si on revient à IDLE/ERROR
+    if(newState !== SystemState.RUNNING) {
+        stopTwinAnimation();
+        document.getElementById('stat-eta').classList.remove('eta-running');
+        document.getElementById('progress-bar').classList.remove('running-anim');
+        if(newState === SystemState.IDLE) {
+            // Redessine en mode normal après fin du tracé
+            setTimeout(drawPreviewCanvas, 50);
+        }
+    }
     updateUIState();
 }
 
 function triggerEStop(reason = "Manuel") {
     txQueue = []; // Purge
     waitingForOk = false;
+    stopSimulation();
+    stopTwinAnimation();
     sendData('a'); // Arduino stop char
     changeState(SystemState.ERROR);
     playBeep('error');
@@ -446,11 +470,20 @@ function triggerEStop(reason = "Manuel") {
 function updateUIState() {
     const isReady = isConnected && currentState !== 'ERROR';
     const hasSvgReady = totalSegments > 0 && checklistDone;
+    const isRunning = currentState === SystemState.RUNNING;
     
-    document.querySelectorAll('.btn-jog').forEach(b => b.disabled = !isReady);
-    document.getElementById('btn-homing').disabled = !isReady;
+    document.querySelectorAll('.btn-jog').forEach(b => b.disabled = !isReady || isRunning);
+    document.getElementById('btn-homing').disabled = !isReady || isRunning;
     
     document.getElementById('btn-start-auto').disabled = !(isReady && hasSvgReady && currentState === 'IDLE');
+    
+    // Bouton simulation : actif si SVG chargé et pas déjà en cours
+    const btnSim = document.getElementById('btn-simulate');
+    if(btnSim) btnSim.disabled = !(totalSegments > 0 && !isRunning);
+    
+    // Affichage de la barre de statut du tracé
+    const statusBar = document.getElementById('plot-status-bar');
+    if(statusBar) statusBar.classList.toggle('hidden', !isRunning);
 }
 
 // ==========================================
@@ -522,126 +555,279 @@ function handlePaperChange(e) {
 function drawPreviewCanvas() {
     const canvas = document.getElementById('preview-canvas');
     const ctx = canvas.getContext('2d');
-    ctx.clearRect(0,0,canvas.width, canvas.height);
-    
     const s = loadSettings();
-    canvas.width = 400; canvas.height = 400; // Ref frame
+    canvas.width = 400; canvas.height = 400;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Dessin du papier (centré ou aligné en bas à gauche de la zone 400x400 selon le besoin)
-    // On dessine le papier en partant du coin haut gauche par defaut pour faire correspondre le canvas
-    ctx.fillStyle = '#ffffff'; // Fond blanc du papier
-    let pwPx = (paperW / s.xmax) * canvas.width;
-    let phPx = (paperH / s.ymax) * canvas.height;
+    // Papier
+    const pwPx = (paperW / s.xmax) * canvas.width;
+    const phPx = (paperH / s.ymax) * canvas.height;
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, pwPx, phPx);
-    // Bord du papier
     ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = 1;
     ctx.strokeRect(0, 0, pwPx, phPx);
 
-    ctx.strokeStyle = '#0056b3';
-    ctx.lineWidth = 1;
-    
-    let isOutOfBounds = false;
-    let totalDrawDistance = 0;
-    let totalTravelDistance = 0;
-    
-    let lastPenX = 0, lastPenY = 0; // virtuel pour l'ETA
-
-    svgPolylines.forEach(poly => {
-        ctx.beginPath();
-        for(let i=0; i<poly.length; i++) {
-            let x = poly[i].x * scaleFactor + offsetX;
-            let y = poly[i].y * scaleFactor + offsetY;
-            
-            if(x < 0 || x > paperW || y < 0 || y > paperH) isOutOfBounds = true;
-
-            let cx = (x / s.xmax) * canvas.width;
-            let cy = (y / s.ymax) * canvas.height;
-            if(i===0) {
-                ctx.moveTo(cx, cy);
-                totalTravelDistance += Math.hypot(x - lastPenX, y - lastPenY);
-            }
-            else {
-                ctx.lineTo(cx, cy);
-                totalDrawDistance += Math.hypot(x - lastPenX, y - lastPenY);
-            }
-            lastPenX = x;
-            lastPenY = y;
-        }
-        ctx.stroke();
+    const toCanvas = (x, y) => ({
+        cx: ((x * scaleFactor + offsetX) / s.xmax) * canvas.width,
+        cy: ((y * scaleFactor + offsetY) / s.ymax) * canvas.height
     });
 
+    const isRunning = currentState === SystemState.RUNNING && commandMap.length > 0;
+    let isOutOfBounds = false;
+
+    // Vérification hors-limites (toujours)
+    svgPolylines.forEach(poly => {
+        poly.forEach(pt => {
+            const x = pt.x * scaleFactor + offsetX;
+            const y = pt.y * scaleFactor + offsetY;
+            if(x < 0 || x > paperW || y < 0 || y > paperH) isOutOfBounds = true;
+        });
+    });
+
+    if(!isRunning) {
+        // === MODE NORMAL : tracé plein bleu ===
+        ctx.strokeStyle = '#0056b3';
+        ctx.lineWidth = 1;
+        let lastPenX = 0, lastPenY = 0;
+        let totalDrawDist = 0, totalTravelDist = 0;
+
+        svgPolylines.forEach(poly => {
+            ctx.beginPath();
+            for(let i = 0; i < poly.length; i++) {
+                const x = poly[i].x * scaleFactor + offsetX;
+                const y = poly[i].y * scaleFactor + offsetY;
+                const { cx, cy } = toCanvas(poly[i].x, poly[i].y);
+                if(i === 0) {
+                    ctx.moveTo(cx, cy);
+                    totalTravelDist += Math.hypot(x - lastPenX, y - lastPenY);
+                } else {
+                    ctx.lineTo(cx, cy);
+                    totalDrawDist += Math.hypot(x - lastPenX, y - lastPenY);
+                }
+                lastPenX = x; lastPenY = y;
+            }
+            ctx.stroke();
+        });
+
+        // ETA statique
+        const speedDraw = s.vdraw * 40, speedTravel = s.vfast * 40;
+        if(speedDraw > 0 && speedTravel > 0) {
+            const zTime = svgPolylines.length * 2 * (10 / (s.vfast * 40)) * 60;
+            const t = (totalDrawDist / speedDraw) * 60 + (totalTravelDist / speedTravel) * 60 + zTime;
+            document.getElementById('stat-eta').innerText = `~${Math.floor(t/60)}m ${Math.floor(t%60)}s`;
+            document.getElementById('stat-eta').classList.remove('eta-running');
+        } else {
+            document.getElementById('stat-eta').innerText = '--:--';
+        }
+    } else {
+        // === MODE JUMEAU NUMÉRIQUE ===
+
+        // Passe 1 : Fantôme (tout le tracé, translucide)
+        ctx.strokeStyle = 'rgba(0, 86, 179, 0.15)';
+        ctx.lineWidth = 1.5;
+        svgPolylines.forEach(poly => {
+            ctx.beginPath();
+            for(let i = 0; i < poly.length; i++) {
+                const { cx, cy } = toCanvas(poly[i].x, poly[i].y);
+                if(i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+            }
+            ctx.stroke();
+        });
+
+        // Passe 2 : Segments confirmés (vert vif)
+        ctx.strokeStyle = '#27ae60';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#2ecc71';
+        ctx.shadowBlur = 5;
+
+        const confirmedSegs = getConfirmedSegments();
+        confirmedSegs.forEach(seg => {
+            const poly = svgPolylines[seg.polylineIdx];
+            if(!poly) return;
+            const from = poly[seg.fromIdx], to = poly[seg.toIdx];
+            if(!from || !to) return;
+            const f = toCanvas(from.x, from.y);
+            const t = toCanvas(to.x, to.y);
+            ctx.beginPath();
+            ctx.moveTo(f.cx, f.cy);
+            ctx.lineTo(t.cx, t.cy);
+            ctx.stroke();
+        });
+        ctx.shadowBlur = 0;
+
+        // Tête courante (cercle pulsant)
+        let lastDrawCmd = null;
+        for(let i = Math.min(okCount, commandMap.length) - 1; i >= 0; i--) {
+            if(commandMap[i].draws) { lastDrawCmd = commandMap[i]; break; }
+        }
+        if(lastDrawCmd) {
+            const poly = svgPolylines[lastDrawCmd.polylineIdx];
+            const pt = poly && poly[lastDrawCmd.pointIdx];
+            if(pt) {
+                const { cx, cy } = toCanvas(pt.x, pt.y);
+                const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 180);
+                const r = 4 + pulse * 3;
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(231, 76, 60, ${0.6 + pulse * 0.4})`;
+                ctx.shadowColor = '#e74c3c';
+                ctx.shadowBlur = 12;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+    }
+
+    // Bordure canvas
     const wrapper = document.getElementById('preview-wrapper');
     if(isOutOfBounds && svgPolylines.length > 0) {
-        wrapper.style.borderColor = 'red';
-        wrapper.style.boxShadow = '0 0 10px red';
+        wrapper.style.borderColor = '#e74c3c';
+        wrapper.style.boxShadow = '0 0 12px rgba(231,76,60,0.6)';
+    } else if(isRunning) {
+        wrapper.style.borderColor = '#27ae60';
+        wrapper.style.boxShadow = '0 0 14px rgba(39,174,96,0.5)';
     } else {
         wrapper.style.borderColor = '#ccc';
         wrapper.style.boxShadow = 'none';
     }
-    
-    // Calcul ETA (Heuristique basée sur la vitesse en mm/min via RPM et MM_PER_REV=40 du C++)
-    // En réalité s.vdraw est un RPM. MM/min = RPM * 40.
-    let speedDrawMmMin = s.vdraw * 40; 
-    let speedTravelMmMin = s.vfast * 40;
-    if(speedDrawMmMin > 0 && speedTravelMmMin > 0) {
-        let maxZTime = svgPolylines.length * 2 * (10 / (s.vfast*40)) * 60; // Approximons 10mm voyage Z en secondes
-        let timeSecs = (totalDrawDistance / speedDrawMmMin)*60 + (totalTravelDistance / speedTravelMmMin)*60 + maxZTime;
-        let mins = Math.floor(timeSecs / 60);
-        let secs = Math.floor(timeSecs % 60);
-        document.getElementById('stat-eta').innerText = `~${mins}m ${secs}s`;
-    } else {
-        document.getElementById('stat-eta').innerText = "--:--";
+}
+
+// ==========================================
+// 9. JUMEAU NUMÉRIQUE
+// ==========================================
+
+function onOkReceived() {
+    okCount++;
+    updateDigitalTwin();
+    if(okCount >= commandMap.length) {
+        stopSimulation();
+        stopTwinAnimation();
+        changeState(SystemState.IDLE);
+        showToast("✓ Tracé terminé !", "success");
+        playBeep('ok');
     }
 }
 
-function startPlotting() {
-    if(!isConnected) return;
-    changeState(SystemState.RUNNING);
-    
+function updateDigitalTwin() {
+    const total = commandMap.length;
+    const progress = total > 0 ? (okCount / total) * 100 : 0;
+    const bar = document.getElementById('progress-bar');
+    bar.style.width = progress.toFixed(1) + '%';
+    bar.classList.add('running-anim');
+
+    const totalDraw = commandMap.filter(c => c.draws).length;
+    const doneDraw  = commandMap.slice(0, okCount).filter(c => c.draws).length;
+    const elConfirm = document.getElementById('stat-confirmed-segs');
+    if(elConfirm) elConfirm.innerText = `${doneDraw} / ${totalDraw}`;
+    const elStatSegs = document.getElementById('plot-stat-segs');
+    if(elStatSegs) elStatSegs.innerText = `${doneDraw} / ${totalDraw}`;
+
+    if(plotStartTime && okCount > 3) {
+        const elapsed  = (Date.now() - plotStartTime) / 1000;
+        const remaining = ((elapsed / okCount) * (total - okCount));
+        const mins = Math.floor(remaining / 60);
+        const secs = Math.floor(remaining % 60);
+        const etaStr = `~${mins}m ${secs}s`;
+        document.getElementById('stat-eta').innerText = etaStr;
+        document.getElementById('stat-eta').classList.add('eta-running');
+        const elStatEta = document.getElementById('plot-stat-eta');
+        if(elStatEta) elStatEta.innerText = etaStr;
+    }
+}
+
+function getConfirmedSegments() {
+    const segs = [];
+    for(let i = 0; i < Math.min(okCount, commandMap.length); i++) {
+        const cmd = commandMap[i];
+        if(cmd.draws) segs.push({ polylineIdx: cmd.polylineIdx, fromIdx: cmd.pointIdx - 1, toIdx: cmd.pointIdx });
+    }
+    return segs;
+}
+
+function startTwinAnimation() {
+    stopTwinAnimation();
+    function loop() {
+        if(currentState === SystemState.RUNNING) {
+            drawPreviewCanvas();
+            animFrameId = requestAnimationFrame(loop);
+        }
+    }
+    animFrameId = requestAnimationFrame(loop);
+}
+
+function stopTwinAnimation() {
+    if(animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+}
+
+function startSimulation() {
+    stopSimulation();
     const s = loadSettings();
-    
-    // Suivi de la position (Tête virtuelle)
-    let curX = 0;
-    let curY = 0;
-    
-    // Injection
-    queueCommand('i'); // Homing initial (Ramène matériellement et virtuellement à 0,0)
-    queueCommand(`z${s.zup}v${s.vfast}`); // Monte le stylo (Postulat: Z=0 après Homing Z, on monte).
-    
-    svgPolylines.forEach((poly, index) => {
-        // Move to start of polyline
+    // Vitesse simulation : proportionnel à la vitesse de tracé (50ms par défaut)
+    const msPerCmd = Math.max(20, Math.min(200, Math.round(1000 / (s.vdraw || 40))));
+    simulationTimer = setInterval(() => {
+        if(okCount >= commandMap.length || currentState !== SystemState.RUNNING) {
+            stopSimulation(); return;
+        }
+        onOkReceived();
+    }, msPerCmd);
+}
+
+function stopSimulation() {
+    if(simulationTimer) { clearInterval(simulationTimer); simulationTimer = null; }
+}
+
+function startPlotting(simulate = false) {
+    if(!isConnected && !simulate) { showToast("Non connecté à la carte.", "error"); return; }
+    if(totalSegments === 0) { showToast("Aucun SVG chargé.", "error"); return; }
+
+    changeState(SystemState.RUNNING);
+    commandMap = [];
+    okCount = 0;
+    plotStartTime = Date.now();
+
+    const s = loadSettings();
+    let curX = 0, curY = 0;
+
+    const addCmd = (cmd, meta) => {
+        commandMap.push(meta);
+        if(!simulate) queueCommand(cmd);
+    };
+
+    addCmd('i', { type: 'homing', draws: false });
+    addCmd(`z${s.zup}v${s.vfast}`, { type: 'z-up', draws: false });
+
+    svgPolylines.forEach((poly, polyIdx) => {
         let startX = (poly[0].x * scaleFactor + offsetX) * s.calib;
         let startY = (poly[0].y * scaleFactor + offsetY) * s.calib;
-        
-        // Calcul du Delta
-        let dx = startX - curX;
-        let dy = startY - curY;
-        
-        if (dx !== 0 || dy !== 0) {
-            queueCommand(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${s.vfast}`);
-            curX = startX;
-            curY = startY;
+        let dx = startX - curX, dy = startY - curY;
+
+        if(dx !== 0 || dy !== 0) {
+            addCmd(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${s.vfast}`,
+                { type: 'travel', draws: false, polylineIdx: polyIdx });
+            curX = startX; curY = startY;
         }
 
-        // Pen Down
-        queueCommand(`z-${s.zup}v${s.vfast}`);
-        
-        // Draw
-        for(let i=1; i<poly.length; i++) {
+        addCmd(`z-${s.zup}v${s.vfast}`, { type: 'z-down', draws: false, polylineIdx: polyIdx });
+
+        for(let i = 1; i < poly.length; i++) {
             let nextX = (poly[i].x * scaleFactor + offsetX) * s.calib;
             let nextY = (poly[i].y * scaleFactor + offsetY) * s.calib;
-            
-            let ddx = nextX - curX;
-            let ddy = nextY - curY;
-            
-            queueCommand(`x${ddx.toFixed(2)}y${ddy.toFixed(2)}v${s.vdraw}`);
-            curX = nextX;
-            curY = nextY;
+            addCmd(`x${(nextX-curX).toFixed(2)}y${(nextY-curY).toFixed(2)}v${s.vdraw}`,
+                { type: 'draw', draws: true, polylineIdx: polyIdx, pointIdx: i });
+            curX = nextX; curY = nextY;
         }
-        
-        // Pen Up
-        queueCommand(`z${s.zup}v${s.vfast}`);
+
+        addCmd(`z${s.zup}v${s.vfast}`, { type: 'z-up', draws: false, polylineIdx: polyIdx });
     });
+
+    document.getElementById('progress-bar').style.width = '0%';
+    updateDigitalTwin();
+    startTwinAnimation();
+    if(simulate) {
+        showToast("Simulation démarrée !", "info");
+        startSimulation();
+    }
 }
 
 // ==========================================

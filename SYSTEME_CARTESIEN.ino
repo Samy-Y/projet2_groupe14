@@ -308,7 +308,7 @@ void setup() {
   for (int p : (int[]){CLK1,EN1,CW1,CLK2,EN2,CW2,CLK3,EN3,CW3}) pinMode(p,OUTPUT);
   for (int p : (int[]){LIMIT1,LIMIT2,LIMIT3}) pinMode(p,INPUT_PULLUP);
   digitalWrite(EN1,LOW); digitalWrite(EN2,LOW); digitalWrite(EN3,LOW);
-  Serial.println(F("=== H-Bot v4 ==="));
+  Serial.println(F("=== G14 - TRACEUR ==="));
   Serial.println(F("x<mm>v<rpm> | y<mm>v<rpm> | x<mm>y<mm>v<rpm> | z<mm>v<rpm>"));
   Serial.println(F("s=position  i=homingXY  k=homingZ  p=params  a=STOP"));
 }

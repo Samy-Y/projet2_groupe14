@@ -97,6 +97,7 @@
                                 <p>Segments: <span id="stat-segments">0</span></p>
                                 <p id="warning-segments" class="warning hidden"><i class="fas fa-exclamation-triangle"></i> >10k segments ! Risque de latence.</p>
                                 <p>ETA: <span id="stat-eta">--:--</span></p>
+                                <p id="stat-confirmed-line" class="hidden">Confirmés: <span id="stat-confirmed-segs">0 / 0</span></p>
                             </div>
                         </div>
 
@@ -133,6 +134,9 @@
                         <button id="btn-start-auto" class="btn btn-success disabled" disabled title="Démarrer le tracé [Shift+T]">
                             <i class="fas fa-play"></i> <span>Démarrer le <u>t</u>raçage</span>
                         </button>
+                        <button id="btn-simulate" class="btn btn-simulate" title="Simuler le tracé sans carte physique" disabled>
+                            <i class="fas fa-vial"></i> <span>Simuler le tracé</span>
+                        </button>
                         <button id="btn-pause-auto" class="btn btn-secondary disabled" disabled>
                             <i class="fas fa-pause"></i> <span>Pause</span>
                         </button>
@@ -141,6 +145,11 @@
                         </button>
                         <div class="progress-bar-container">
                             <div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
+                        </div>
+                        <div id="plot-status-bar" class="plot-status-bar hidden">
+                            <span class="twin-badge"><i class="fas fa-satellite-dish"></i> JUMEAU ACTIF</span>
+                            <span>Segments confirmés : <strong id="plot-stat-segs">0</strong></span>
+                            <span class="eta-label">ETA restant : <strong id="plot-stat-eta">--</strong></span>
                         </div>
                     </div>
                 </div>

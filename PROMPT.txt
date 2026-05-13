@@ -158,5 +158,30 @@ E. FEEDBACK UTILISATEUR ET ERGONOMIE (UX) :
   - Erreur (Rouge + Audio) : Échec du port série, détection d'une fin de course (LIMIT), ou retour de commande inconnue. Ces événements doivent impérativement déclencher la lecture du fichier audio d'alerte configuré précédemment.
 - Infobulles Contextuelles (Tooltips) : Tous les boutons d'action (Arrêt d'Urgence, Homing, Import, Clear Console) doivent révéler une infobulle au survol (hover) détaillant brièvement l'action matérielle induite et rappelant explicitement le raccourci clavier associé (ex: "Arrêt d'urgence [Shift + S]").
 
+### Spécifications de l'API Série pour l'Interface Graphique (IHM)
+
+**Configuration matérielle :**
+*   **Baudrate :** 115200.
+*   **Terminaison :** LF (`\n` ou `\r\n` toléré car la chaîne est nettoyée par `.trim()`).
+*   **Protocole :** Handshake implicite strict. L'IHM ne doit jamais envoyer une commande de mouvement tant qu'elle n'a pas reçu le signal de fin de traitement (`OK` ou une erreur) de la commande précédente pour éviter la saturation du buffer RX.
+
+**Commandes de contrôle (Système) :**
+*   `s` : Requête de statut. Renvoie la position absolue actuelle (`>> X=...`) suivie de `OK`.
+*   `i` : Séquence Homing XY. Séquence bloquante. Renvoie `OK` (succès) ou `LIMIT X`/`LIMIT Y` (échec palpage).
+*   `k` : Séquence Homing Z. Séquence bloquante. Renvoie `OK` ou `LIMIT Z`.
+*   `a` ou `A` (Arrêt d'urgence) : Seule commande scrutée de manière asynchrone (via `Serial.peek()`) au sein même des boucles d'exécution temporelles. Interrompt la trajectoire instantanément. Renvoie `!!! ARRET !!!` suivi du statut positionnel.
+*   `p` : Éditeur de paramètres interactif. **Avertissement architectural :** Cette commande ouvre un sous-menu bloquant nécessitant plusieurs échanges séquentiels avec un timeout de 10s. Pour une IHM de production, il est fortement déconseillé de l'utiliser à moins d'implémenter une machine d'état spécifique côté client. Les paramètres devraient idéalement être envoyés en une seule trame formatée.
+
+**Commandes cinématiques (Déplacements par Deltas) :**
+*   `x[val]y[val]v[val]` : Déplacement XY. `val` est un flottant (ex: `x50y-20.5v80`).
+*   `x[val]v[val]` ou `y[val]v[val]` : Déplacement d'un seul axe.
+*   `z[val]v[val]` : Déplacement Z.
+
+**Analyse des signaux de retour (Parsing) :**
+*   `OK` : Exécution terminée, attente de la trame suivante.
+*   `ERR` : Rejet syntaxique (ex: absence de coordonnée, ou `v` manquante) ou paramètre aberrant ($V \le 0$ ou $\Delta = 0$).
+*   `LIMIT [AXE]` : Signal critique de sécurité. L'IHM doit le capter pour figer ses envois, alerter l'utilisateur et forcer une nouvelle procédure de prise d'origine.
+*   `>> X=[val]mm Y=[val]mm Z=[val]mm  [0-400 / 0-100mm]` : Chaîne de télémétrie pure. Prévoir un parser Regex pour extraire dynamiquement les coordonnées spatiales exactes.
+
 -----
 Crée un nouveau fichier HTML dans le dossier de travail actuel : il s'agit ton dossier de travail principal.
