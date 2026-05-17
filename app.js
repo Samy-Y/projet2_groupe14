@@ -130,14 +130,52 @@ document.addEventListener('DOMContentLoaded', () => {
     // Suivi basique pour manuel (approximation)
     let isZUp = true;
     document.getElementById('btn-z-up').addEventListener('click', () => {
-        let dz = isZUp ? 0 : loadSettings().zup;
-        if(dz !== 0) queueCommand(`z${dz}v${loadSettings().vfast}`);
+        let ztarget = loadSettings().zup;
+        let dz = ztarget - currentMachineZ;
+        if(Math.abs(dz) > 0.01) queueCommand(`z${dz.toFixed(2)}v${loadSettings().vfast}`);
         isZUp = true;
+        queueCommand('s');
     });
     document.getElementById('btn-z-down').addEventListener('click', () => {
-        let dz = isZUp ? -loadSettings().zup : 0;
-        if(dz !== 0) queueCommand(`z${dz}v${loadSettings().vfast}`);
+        let ztarget = loadSettings().zdown;
+        let dz = ztarget - currentMachineZ;
+        if(Math.abs(dz) > 0.01) queueCommand(`z${dz.toFixed(2)}v${loadSettings().vfast}`);
         isZUp = false;
+        queueCommand('s');
+    });
+
+    // Z Probing Modal
+    document.getElementById('btn-z-probe').addEventListener('click', () => {
+        document.getElementById('modal-z-probe').classList.remove('hidden');
+        document.getElementById('probe-z-val').innerText = currentMachineZ.toFixed(2);
+        queueCommand('s');
+    });
+    document.getElementById('btn-close-z-probe').addEventListener('click', () => { document.getElementById('modal-z-probe').classList.add('hidden'); });
+    document.getElementById('btn-done-z-probe').addEventListener('click', () => { document.getElementById('modal-z-probe').classList.add('hidden'); });
+
+    document.querySelectorAll('.btn-jog-z').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            let val = parseFloat(e.currentTarget.dataset.val);
+            let rpm = loadSettings().vfast;
+            queueCommand(`z${val}v${rpm}`);
+            queueCommand('s'); 
+        });
+    });
+
+    document.getElementById('btn-set-z-down').addEventListener('click', () => {
+        let s = loadSettings();
+        s.zdown = currentMachineZ;
+        localStorage.setItem('systemSettings', JSON.stringify(s));
+        initSettingsOverrides(); 
+        showToast("Z Stylo Baissé défini à " + currentMachineZ.toFixed(2) + "mm", "success");
+    });
+    
+    document.getElementById('btn-set-z-up').addEventListener('click', () => {
+        let s = loadSettings();
+        s.zup = currentMachineZ;
+        localStorage.setItem('systemSettings', JSON.stringify(s));
+        initSettingsOverrides();
+        showToast("Z Stylo Levé défini à " + currentMachineZ.toFixed(2) + "mm", "success");
     });
 
     document.getElementById('btn-go-abs').addEventListener('click', () => {
@@ -428,6 +466,12 @@ function handleHardwareResponse(line) {
             currentMachineX = parseFloat(match[1]);
             currentMachineY = parseFloat(match[2]);
             currentMachineZ = parseFloat(match[3]);
+            
+            const probeZVal = document.getElementById('probe-z-val');
+            if (probeZVal && !document.getElementById('modal-z-probe').classList.contains('hidden')) {
+                probeZVal.innerText = currentMachineZ.toFixed(2);
+            }
+
             if (pendingAbsoluteMove) {
                 const move = pendingAbsoluteMove;
                 pendingAbsoluteMove = null;

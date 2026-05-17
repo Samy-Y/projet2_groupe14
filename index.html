@@ -334,6 +334,42 @@
         </div>
     </div>
 
+    <!-- Modale Calibration Z -->
+    <div id="modal-z-probe" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2><i class="fas fa-bullseye"></i> Calibration Z (Manuel)</h2>
+                <button class="btn-close" id="btn-close-z-probe"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body text-center">
+                <p>Ajustez finement la hauteur du stylo pour définir les positions de tracé et de dégagement.</p>
+                
+                <h3 class="mt-2" style="font-size: 2em; margin: 10px 0;">Z = <span id="probe-z-val">--</span> mm</h3>
+
+                <div class="jog-controls mt-2" style="justify-content: center; gap: 10px; display: flex;">
+                    <div style="display: flex; flex-direction: column; gap: 5px;">
+                        <button class="btn btn-secondary btn-jog-z" data-val="10"><i class="fas fa-angle-double-up"></i> +10 mm</button>
+                        <button class="btn btn-secondary btn-jog-z" data-val="1"><i class="fas fa-angle-up"></i> +1 mm</button>
+                        <button class="btn btn-secondary btn-jog-z" data-val="0.1"><i class="fas fa-chevron-up"></i> +0.1 mm</button>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 5px;">
+                        <button class="btn btn-secondary btn-jog-z" data-val="-0.1"><i class="fas fa-chevron-down"></i> -0.1 mm</button>
+                        <button class="btn btn-secondary btn-jog-z" data-val="-1"><i class="fas fa-angle-down"></i> -1 mm</button>
+                        <button class="btn btn-secondary btn-jog-z" data-val="-10"><i class="fas fa-angle-double-down"></i> -10 mm</button>
+                    </div>
+                </div>
+
+                <div class="mt-2" style="display: flex; gap: 10px; justify-content: center;">
+                    <button class="btn btn-primary" id="btn-set-z-down"><i class="fas fa-pen-nib"></i> Définir Z "Stylo Baissé"</button>
+                    <button class="btn btn-primary" id="btn-set-z-up"><i class="fas fa-arrow-up"></i> Définir Z "Stylo Levé"</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-done-z-probe" class="btn btn-success">Terminer</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Footer pour Télémétrie -->
     <footer>
         <div id="network-status"><i class="fas fa-wifi"></i> En ligne</div>
