@@ -182,6 +182,8 @@ void deplacerXY(float dx, float dy, float rpm) {
   unsigned long maxDelay = (unsigned long)(30000000.0f / (MIN_RPM * STEPS_PER_REV));
   unsigned long delayRange = maxDelay - minDelay;
 
+  unsigned long rampSlope = delayRange / rampSteps;
+
   for (long i=0; i<total; i++) {
     if (Serial.available() && (Serial.peek()=='a'||Serial.peek()=='A')) {
       Serial.read();
@@ -200,11 +202,11 @@ void deplacerXY(float dx, float dy, float rpm) {
 
     unsigned long currentHP;
     if (i < rampSteps) {
-      currentHP = maxDelay - ((delayRange * i) / rampSteps);
+      currentHP = maxDelay - (rampSlope * i);
     } 
     else if (i >= total - rampSteps) {
       long decelStep = i - (total - rampSteps);
-      currentHP = minDelay + ((delayRange * decelStep) / rampSteps);
+      currentHP = minDelay + (rampSlope * decelStep);
     } 
     else {
       currentHP = minDelay;

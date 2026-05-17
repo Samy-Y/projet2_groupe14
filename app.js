@@ -140,6 +140,31 @@ document.addEventListener('DOMContentLoaded', () => {
         isZUp = false;
     });
 
+    document.getElementById('btn-go-abs').addEventListener('click', () => {
+        const ax = document.getElementById('abs-x').value;
+        const ay = document.getElementById('abs-y').value;
+        const az = document.getElementById('abs-z').value;
+        const av = document.getElementById('abs-v').value;
+
+        const x = ax !== '' ? parseFloat(ax) : null;
+        const y = ay !== '' ? parseFloat(ay) : null;
+        const z = az !== '' ? parseFloat(az) : null;
+        const v = av !== '' ? parseFloat(av) : loadSettings().vfast;
+
+        if (x === null && y === null && z === null) {
+            showToast("Veuillez entrer au moins une coordonnée.", "warning");
+            return;
+        }
+
+        if (x !== null && (x < 0 || x > loadSettings().xmax)) { showToast("X hors limites", "error"); return; }
+        if (y !== null && (y < 0 || y > loadSettings().ymax)) { showToast("Y hors limites", "error"); return; }
+        if (z !== null && (z < 0 || z > loadSettings().zmax)) { showToast("Z hors limites", "error"); return; }
+
+        pendingAbsoluteMove = { x, y, z, v };
+        // Demande la position courante pour calculer le delta dans la réponse
+        queueCommand('s');
+    });
+
     updateUIState();
 });
 
@@ -388,9 +413,41 @@ async function readLoop() {
     }
 }
 
+let currentMachineX = 0;
+let currentMachineY = 0;
+let currentMachineZ = 0;
+let pendingAbsoluteMove = null;
+
 function handleHardwareResponse(line) {
     logConsole('rx', line);
     
+    if(line.startsWith(">> X=")) {
+        // Ex: >> X=10.00mm Y=20.00mm Z=0.00mm  [0-400 / 0-100mm]
+        const match = line.match(/X=([\d.-]+)mm\s+Y=([\d.-]+)mm\s+Z=([\d.-]+)mm/);
+        if(match) {
+            currentMachineX = parseFloat(match[1]);
+            currentMachineY = parseFloat(match[2]);
+            currentMachineZ = parseFloat(match[3]);
+            if (pendingAbsoluteMove) {
+                const move = pendingAbsoluteMove;
+                pendingAbsoluteMove = null;
+                
+                let dx = move.x !== null ? move.x - currentMachineX : 0;
+                let dy = move.y !== null ? move.y - currentMachineY : 0;
+                let dz = move.z !== null ? move.z - currentMachineZ : 0;
+                
+                // On séquence d'abord XY puis Z pour éviter les collisions ou simplifier (comme le fw le fait séparément)
+                // Ou alors le système permet x y z ? Non, x..y..v.. OU z..v..
+                if (dx !== 0 || dy !== 0) {
+                    queueCommand(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${move.v}`);
+                }
+                if (dz !== 0) {
+                    queueCommand(`z${dz.toFixed(2)}v${move.v}`);
+                }
+            }
+        }
+    }
+
     if(line === "OK") {
         waitingForOk = false;
         if(currentState === SystemState.RUNNING && commandMap.length > 0) {
