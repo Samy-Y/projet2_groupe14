@@ -19,21 +19,18 @@ L'axe Z gère la levée du stylet pour alterner entre les phases de tracé et de
 
 Le micrologiciel (firmware) intègre un pipeline de traitement déterministe :
 - Interpolation : Algorithme DDA (Digital Differential Analyzer) exécuté dans le référentiel moteur pour garantir la rectitude des vecteurs et supprimer le jitter temporel.
-- Dynamique : Profil de vitesse trapézoïdal avec une vitesse initiale plancher (V_min = 20 RPM) pour franchir les zones de résonance mécanique.
+- Dynamique : Profil de vitesse trapézoïdal avec une vitesse initiale plancher (définie dans le code Arduino) pour franchir les zones de résonance mécanique.
 - Sécurité : Surveillance active via 3 capteurs de fin de course (limit switches) et bornage logiciel (soft limits) via la fonction `constrain`.
 - Communication : Protocole de commande textuel structuré (ex: `x100y50v60`) géré de manière asynchrone.
 - Drivers utilisés : TB6560.
-- Zone de traçage : Elle mesure 400x400mm. En revanche, quelques modifications post-fabrication peuvent être réalisées. On doit être capable de changer ce paramètre facilement depuis le backend (réfère toi aux constantes/paramètres contenues dans le code Arduino en pièce jointe).
-- Déplacement maximal selon Z : 100mm. Encore une fois, c'est sujet à modifications. Réfère-toi à la constante présente dans le code Arduino.
+- Zone de traçage : Elle mesure 400x400mm.
+- Déplacement minimal selon Z : 100mm. Il s'agit de la valeur fixée par le cahier de charges que le porte-stylet doit satisfaire en translation verticale.
 
 Contexte sur le groupe et la matière :
 
-Nous sommes le groupe 14 du deuxième projet d'ingénierie (P2) de première année de cycle préparatoire (CPI-1A, Cycle Préparatoire Intégré 1ère Année) de l'UM6P-EMINES, de la promotion "Class 2030" (pas "Class of 2030", pas "Classe 2030"). Le groupe est composé de :
-- Samy Youssoufine.
-- Soufiane Bourghel.
-- Riham Boughrara.
-- Rita Tamma.
-Notre groupe fait partie de l'équipe de la classe qui s'occupe de l'élaboration d'un système cartésien utilisant un vis-écrou pour le déplacement selon Z (l'autre équipe utilisant un système pignon-crémaillère).
+Le projet doit être présenté pour un forum de projet d'ingénierie. Le système conçu est une variante "vis-écrou" du système cartésien (sachant qu'il y a une autre variante utilisant un système pignon-crémaillère pour le déplacement selon Z). Le nom des personnes ayant travaillé sur le système sera fourni plus tard, pour l'instant, laisse des placeholders pour 22 personnes. La matière est "Projet d'Ingénierie". Nous sommes des élèves de la Class2030, pas Class of 2030 ou toute autre variante ; Class2030 uniquement. Nous sommes des étudiants de l'UM6P-EMINES en CPI-1A (Cycle Préparatoire Intégré - 1ère Année).
+
+Ce projet est à usage interne uniquement. La license GitHub doit être donc choisie adéquatement.
 
 RESSOURCES FOURNIES ET DIRECTIVES D'EXPLOITATION :
 
@@ -41,24 +38,20 @@ RESSOURCES FOURNIES ET DIRECTIVES D'EXPLOITATION :
     * Rôle : Vérité absolue (Single Source of Truth) concernant la logique du micrologiciel.
     * Utilisation requise : À analyser impérativement pour extraire la syntaxe exacte du protocole de communication série (format des commandes acceptées) et pour sourcer les constantes matérielles structurelles (limites des axes, résolution par pas, etc.).
 
-* Fichiers visuels : PAGE_1.png et PAGE_2.png
-    * Rôle de PAGE_1.png : Maquette de référence illustrant l'architecture et l'esthétique de la page principale de l'interface.
-    * Rôle de PAGE_2.png : Maquette de référence pour l'interface de commande, avec un focus spécifique sur la disposition de l'onglet "Automatique".
-    * Directive de conception : Ces rendus sont des lignes directrices d'intention conceptuelle. Une reproduction au pixel près n'est pas exigée. L'objectif est d'extraire la hiérarchie de l'information et l'identité visuelle, tout en produisant un code HTML/CSS adaptatif et techniquement supérieur.
-
 INSTRUCTIONS DE DÉVELOPPEMENT :
 
 PARTIE TECHNIQUE (Architecture et Logique Métier) :
 - Stack Technologique : L'interface graphique doit être développée strictement en HTML5, CSS3 et JavaScript Vanilla (statique, sans framework lourd type React/Vue).
 - Protocole de Communication : L'interface doit se connecter à l'Arduino Mega exclusivement via l'API WebSerial native du navigateur.
 - Génération Automatique de l'Axe Z : Le code JavaScript doit générer de manière autonome les commandes de l'axe vertical. Lors de la transition d'un chemin SVG (Path) à un autre, le JS doit insérer une consigne de levée (`Z_UP`), exécuter un déplacement rapide vers le point initial du nouveau chemin, puis insérer une consigne de descente (`Z_DOWN`).
-- Optimisation du Routage : Implémenter un algorithme d'optimisation de type "plus proche voisin" (Nearest Neighbor) pour réorganiser l'ordre d'exécution des chemins SVG. L'objectif est de minimiser drastiquement la distance parcourue avec le stylo levé (Pen Up) et de réduire le temps total d'usinage.
-- Documentation et Déploiement :
-  - Toutes les fonctions JS critiques doivent être documentées via MkDocs.
-  - La documentation doit aussi contenir toutes les variables d'état, l'architecture du projet et la liste des raccourcis clavier.
+- Optimisation du Routage : Implémenter un algorithme d'optimisation de type "plus proche voisin" (Nearest Neighbor) pour réorganiser l'ordre d'exécution des chemins SVG. L'objectif est de minimiser drastiquement la distance parcourue avec le stylo levé (Pen Up) et de réduire le temps total d'usinage/traçage.
+- Documentation et Déploiement : Tout le projet doit être documenté via MkDocs.
+  - Toutes les fonctions JS critiques doivent être documentées via MkDocs, avec des explications plus ou moins vulgarisées (mais PAS enfantines! Il faut rester professionnel), orientées/dédiées à des étudiants de 1ère année (nous) pour simplifier l'opération de maintenance.
+  - La documentation doit aussi contenir l'architecture de l'interface Web (arborescence, algorigrammes ou autres diagrammes de flux extrêmement simplifiés si pertinents).
+  - La documentation doit contenir la liste complète des raccourcis clavier.
   - L'interface et la documentation MkDocs associée seront hébergées sur GitHub Pages.
+  - La documentation doit aussi fournir les instructions relatives au déploiement en utilisant GitHub Pages, que ce soit au niveau de l'interface principale ou de la branche dédiée à la documentation MkDocs. La génération de la documentation MkDocs doit aussi être expliquée dans cette documentation, avec les commandes ou fichiers nécessaires.
   - Rédiger un fichier README.md complet à la racine.
-  - Rédiger un fichier Markdown séparé servant de guide d'installation (dépendances MkDocs, etc.) et de tutoriel de déploiement via GitHub Actions/Pages.
 - Les assets graphiques doivent être stockés dans un dossier assets/ situé dans le dossier principal.
 
 PARTIE SÉCURITÉ ET FIABILITÉ SYSTÈME :
@@ -67,9 +60,9 @@ PARTIE SÉCURITÉ ET FIABILITÉ SYSTÈME :
 - Machine à États : Implémenter un gestionnaire d'états strict (`IDLE`, `HOMING`, `RUNNING`, `ERROR`). Tant que le Homing initial n'a pas été exécuté et validé par l'Arduino, toutes les commandes de déplacement manuel et le lancement d'un tracé doivent être désactivés (visuellement grisés et non cliquables).
 - Asynchronisme (Web Worker) : Le parsing et la discrétisation géométrique d'un fichier SVG lourd peuvent geler le navigateur. Ce traitement mathématique doit impérativement être déporté dans un Web Worker fonctionnant en arrière-plan.
 - Calibrage Spatial :
-  - Fournir une option (case à cocher) pour inverser l'axe Y lors de l'importation du SVG.
-  - Intégrer un sélecteur d'origine physique (Top-Left, Bottom-Left, Center) pour s'adapter à la position de la feuille de papier sur le plateau.
-- Procédure "Calibration Z" : Ajouter un mode spécifique permettant de faire descendre le stylo en mode pas-à-pas (Jog) jusqu'au contact avec le papier. Une fois la position validée par l'utilisateur, l'enregistrer dans le `localStorage` sous la clé `Z_PROBING_ZERO`.
+  - Indiquer le repère de la zone de travail matérielle ainsi que celui du fichier SVG importé. En effet, les deux ne possèdent pas le même répère (axe Y inversés, entre autres). Il faudra aussi documenter les choix techniques entrant en jeu ici.
+  - Intégrer un sélecteur d'origine physique (Top-Left, Bottom-Left, Center, etc.) pour s'adapter à la position de la feuille de papier sur le plateau.
+- Procédure "Calibration Z" : Ajouter un mode spécifique permettant de faire descendre le stylo en mode continu jusqu'au contact avec le papier. Une fois la position validée par l'utilisateur, l'enregistrer dans le `localStorage` sous la clé `Z_PROBING_ZERO`.
 - Résilience aux Déconnexions : Surveiller l'état du port série. En cas de fermeture inattendue (câble arraché), mettre virtuellement le tracé en pause, sauvegarder l'index du dernier vecteur envoyé avec succès, et afficher un bouton "Reprendre le tracé (Resume)" qui sera actif dès la reconnexion du port.
 - Pre-Flight Checklist : Avant de déverrouiller le bouton "Start" pour un tracé, afficher une modale interactive avec des cases à cocher : "Moteurs sous tension ?", "Stylo monté ?", "Origine dégagée ?". Le bouton ne s'active qu'une fois la checklist complétée.
 - Détection de connectivité : Implémenter un script de surveillance de l'état du réseau (via `navigator.onLine`). Si l'utilisateur lance l'interface sans connexion internet (usage local/hors-ligne) :
@@ -79,7 +72,8 @@ PARTIE SÉCURITÉ ET FIABILITÉ SYSTÈME :
   -- Prévoir des attributs alt pour remplacer les icones Font-Awesome utilisées.
 
 PARTIE UI/UX (Conception Visuelle et Ergonomie) :
-- Identité Visuelle : Le design global doit être "flat" (plat) avec une simulation de profondeur mécanique. Les boutons possèdent une ombre portée sans flou (entièrement plate). Lors d'un clic (`:active`), le bouton se translate sur son ombre pour simuler un enfoncement physique.
+- Identité Visuelle :
+Le design global doit être "flat" (plat) avec une simulation de profondeur mécanique. Les boutons possèdent une ombre portée sans flou (entièrement plate). Lors d'un clic (`:active`), le bouton se translate sur son ombre pour simuler un enfoncement physique.
 - Police : Famille Source Sans 3.
 - Palette de Couleurs (à déclarer obligatoirement dans `:root` pour une modularité des thèmes) :
   - Bleu principal : `#0056b3` (Texte : blanc) | Ombre : `#0d345d`
@@ -87,60 +81,84 @@ PARTIE UI/UX (Conception Visuelle et Ergonomie) :
   - Rouge principal (Alertes/E-Stop) : `#c65050` (Texte : blanc) | Ombre : `#912525`
   - Éléments graphiques, bordures et texte de corps sur fond clair : `#333`.
   - Tu dois extrapoler les couleurs manquantes (ex: vert pour le succès, états désactivés) en respectant cette direction artistique.
+  - Toutes les couleurs et éléments graphiques CSS doivent être documentés.
 - Accessibilité et Raccourcis :
   - L'interface doit être 100% navigable au clavier (utilisation propre des index de tabulation).
   - Associer des raccourcis clavier globaux aux actions principales, basés sur la combinaison `Shift + [Lettre]`.
   - La lettre servant de déclencheur doit être visuellement soulignée dans le nom du bouton de l'interface (ex: <u>H</u>oming).
-- Retour Audio : Intégrer des notifications sonores discrètes via l'API HTML Audio pointant vers la bibliothèque hébergée "Google Material Sound" (pas de fichiers locaux). Un son doux pour le succès, un son sec pour les erreurs.
-- Responsive Design (Mobile-First) : L'interface doit être ergonomique sur écrans tactiles (tablettes/téléphones sous Chrome Android gérant WebSerial). Les textes doivent être lisibles sans zoom et les zones de clic (touch targets) doivent être suffisamment larges.
+- Retour Audio : Intégrer des notifications sonores discrètes via l'API HTML Audio pointant vers la bibliothèque hébergée "Google Material Sound" (pas de fichiers locaux). Un son doux pour le succès, un son sec pour les erreurs. D'autres sons pertinents pour les lancements et les démarrages.
+- Responsive Design (Tablet-First) : L'interface doit être ergonomique sur écrans tactiles (tablettes/téléphones sous Chrome Android gérant WebSerial). Les textes doivent être lisibles sans zoom et les zones de clic (touch targets) doivent être suffisamment larges.
 - Iconographie : L'utilisation de la bibliothèque FontAwesome est exigée pour les icônes. Il est formellement interdit d'utiliser des emojis dans l'interface ou dans le code source généré.
 
 FONCTIONNALITÉS ATTENDUES ET ARCHITECTURE DES VUES :
 
 A. VUES STATIQUES ET NAVIGATION :
-- Page d'Accueil (Home) : Vue principale affichant le nom du système, la désignation du groupe, et le logo de l'institution (intégrer la balise `<img>` pointant vers le fichier local `logo_emines.png`).
-- Page "Guide" : Tutoriel de démarrage rapide (Quickstart) décrivant le flux de travail, avec un bouton d'action principal redirigeant vers la documentation MkDocs hébergée.
-- Page "À Propos" : Présentation des membres de l'équipe d'ingénierie.
-- Page "Commande" (Interface de pilotage principale) : Divisée en deux onglets/sections (Automatique et Manuel). Les instructions suivantes concernent exclusivement le mode "Automatique".
+- Page d'Accueil (Home) :
+Vue principale affichant le nom du système ainsi que toutes les informations pertinentes à partir du contexte, et le logo de l'institution (intégrer la balise `<img>` pointant vers le fichier local `logo_emines.png`). Elle doit aussi afficher un rendu du système (`rendu.png`). Cette vue principale doit aussi contenir cinq boutons principaux :
+* Un bouton vers une page de _contrôle_ manuel.
+* Un bouton vers une page de _dessin_ manuel.
+* Un bouton vers une page de _dessin_ automatique.
+* Un bouton vers une page de réglages divers.
+* Un bouton vers une page de guide et à propos.
+- Page "Guide et À propos" : Tutoriel de démarrage rapide (Quickstart) décrivant le flux de travail, avec un bouton d'action principal redirigeant vers la documentation MkDocs hébergée. Présentation des membres de l'équipe d'ingénierie.
+- Page "Contrôle Manuel".
+- Page "Dessin Manuel".
+- Page "Dessin Automatique".
 
-B. CONTRÔLE AUTOMATIQUE (WORKFLOW DE TRACÉ SVG) :
+B. DESSIN AUTOMATIQUE (WORKFLOW DE TRACÉ) :
 
-Étape 1 : Importation et Traitement Mathématique (Discrétisation)
-- Chargement SVG : Bouton d'import de fichier local (`.svg`).
+Deux onglets doivent être présents :
+- Un dédié aux dessins quelconques (import d'image, puis tracé direct), dont les étapes sont détaillés ci-dessous.
+- Un dédié aux single-line arts, généré à partir d'une image Raster/Bitmap.
+
+Étape 1 : Importation d'un fichier Raster OU SVG, puis conversion en fichier vectoriel.
+- L'utilisation d'un Middleware pour la conversion Raster → SVG est recommandée. Privilégie l'utilisation de CDN pour toute bibliothèque externe.
+- Un bouton d'import de fichier local doit être mis à disposition de l'utilisateur. La conversion Raster doit se faire en se basant sur les contours et les contrastes.
+
+Étape 2 : Traitement Mathématique (Discrétisation)
 - Paramètres de Discrétisation (Accessibles à l'utilisateur) :
-  - Erreur cordale (Distance max courbe/segment) : Par défaut à 0.1 mm. Réglable.
+  - Précision : À partir du contexte qui t'a été fourni, extrapole les critères de précision sur lesquels l'utilisateur devrait pouvoir se contrôler (il s'agira très probablement de la longueur des segments et des erreurs cordales). Document ces critères et ces choix techniques dans le documentation.
   - Filtrage spatial (Longueur minimale de segment) : Fixé par défaut à 0.2 mm (résolution machine) pour prévenir la saturation du buffer série par des micro-segments inutiles.
-- Aplatissement (Flattening) : Convertir toutes les balises géométriques (`path`, `circle`, `ellipse`, `rect`) en polylignes (séries de coordonnées X,Y) en utilisant une subdivision récursive pure ou une bibliothèque JavaScript dédiée (ex: `flatten-svg`). Si une bibliothèque est utilisée, documenter son installation.
+- Aplatissement (Flattening) : Convertir toutes les balises géométriques (`path`, `circle`, `ellipse`, `rect`) en polylignes (séries de coordonnées X,Y) en utilisant une subdivision récursive pure ou une bibliothèque JavaScript dédiée (ex: `flatten-svg`). Si une bibliothèque est utilisée, documenter les procédures d'installation.
 - Audit de complexité : Calculer et afficher le nombre total de segments générés post-discrétisation. Si ce nombre excède 10 000, afficher une alerte visuelle (Warning) informant du risque de latence sur la liaison série.
 
-Étape 2 : Configuration du Support et Placement
-- Modélisation du papier : Générer un calque de fond rectangulaire (gris très clair) dans la zone de dessin virtuelle, représentant la feuille physique.
-- Sélection du format : Menu déroulant proposant les standards A4 (210x297mm, Portrait/Paysage), A3 (297x420mm) et un format Personnalisé (champs de saisie L x l).
-- Manipulation spatiale : Permettre le positionnement (translation) et le redimensionnement (mise à l'échelle) du tracé SVG discrétisé par rapport à la feuille.
-- Sécurité anti-collision (Software Limits) : Évaluer en temps réel les coordonnées matricielles du tracé positionné. Si les limites du tracé excèdent les dimensions de la feuille sélectionnée OU la constante `MAX_TRAVEL_MM` de la machine, déclencher une alerte : le contour du calque "papier" clignote en rouge et le bouton "Lancer le tracé" est strictement verrouillé.
+Étape 3 : Configuration du Support et Placement
+- Modélisation du papier : Générer un calque de fond carré (gris foncé) dans la zone de dessin virtuelle, représentant la zone de travail de 400mm x 400mm. Un autre calque rectangulaire, représentant la feuille utilisée, positionné librement sur cette zone en utilisant des poignées de déplacement (AVEC magnétisme pour faciliter le centrage ou la mise en coin), ou précisément en utilisant des champs dédiés (positionnement millimètre par millimètre), avec des options prédéfinies (CENTER/BOTTOM LEFT/...) pour positionner précisément la feuille virtuelle et faire en sorte que le tracé réelle ne déborde pas sur la zone de travail et dépasse la feuille.
+- Sélection du format : Menu déroulant proposant les standards A4 (210x297mm, Portrait/Paysage), A3 (297x420mm, Portrait/Paysage) et un format Personnalisé (champs de saisie L x l).
+- Manipulation spatiale : Permettre le positionnement (translation) et le redimensionnement (mise à l'échelle) du tracé SVG discrétisé par rapport à la feuille à l'aide de poignées de transformation (rotation, échelle, déplacement) comme dans un logiciel d'édition de schémas ou de photos. Ces transformations doivent aussi être réalisable "manuellement" en modifiant l'angle, la position et l'échelle du tracé via champs dédiés.
+- Sécurité anti-collision (Software Limits) : Évaluer en temps réel les coordonnées matricielles du tracé positionné. Si les limites du tracé excèdent les dimensions de la feuille sélectionnée OU la constante `MAX_TRAVEL_MM` de la machine, déclencher une alerte : le contour du calque "papier" clignote en rouge mais le bouton "Lancer le tracé" n'est pas vérouillé. Une modale s'affiche tout de même pour s'assurer que l'utilisateur est conscient de ce choix.
 
-Étape 3 : Prévisualisation et Monitoring (Jumeau Numérique)
-- Rendu d'analyse : Dans le canvas de prévisualisation, afficher le tracé discrétisé. Placer des marqueurs visuels (petits points de 1 ou 2 pixels) aux extrémités de chaque segment pour permettre à l'opérateur d'évaluer la densité de la discrétisation.
+Étape 4 : Prévisualisation et Monitoring (Jumeau Numérique)
+- Rendu d'analyse : Dans le canvas de prévisualisation, afficher le tracé discrétisé. Placer des marqueurs visuels (petits points) aux extrémités de chaque segment pour permettre à l'opérateur d'évaluer la densité de la discrétisation.
 - Calcul ETA : Dès l'import et le redimensionnement, calculer la distance vectorielle totale du parcours. En fonction de la vitesse de consigne, afficher une estimation du temps de tracé (ETA).
+- Simulation du traçage : L'utilisateur doit être capable de simuler l'opération de traçage avec le même ordre d'opérations, en ayant l'option de manipuler la vitesse de simulation, pour confirmer l'ETA et l'ordre des opérations.
 
-Étape 4 : Exécution et Télémétrie en Temps Réel
+Étape 5 : Exécution et Télémétrie en Temps Réel
 - Séquence de démarrage : Le clic sur "Lancer le tracé" doit automatiquement préfixer la séquence par une commande de Homing absolu (si la machine n'est pas déjà à l'état HOMED).
-- Tracking en direct (Ghosting) : Pendant l'usinage, le rendu d'analyse se transforme. Le tracé global passe en gris clair (fantôme). Au fur et à mesure des retours "OK" de l'Arduino confirmant l'exécution d'un segment, surligner le chemin parcouru en bleu intense pour représenter la position réelle du stylet.
+- Tracking en direct (Ghosting) : Pendant l'usinage, le rendu d'analyse se transforme. Le tracé global passe en gris clair (fantôme). Au fur et à mesure des retours "OK" de l'Arduino confirmant l'exécution d'un segment, surligner le chemin parcouru en vert intense pour représenter la position réelle du stylet.
 - Jauge de progression : Afficher une barre de progression dynamique (0 à 100%) couplée à un compte à rebours basé sur l'ETA.
 
-C. CONTRÔLE MANUEL ET RÉALISATION DIRECTE (JOGGING & DRAWING) :
-- Outil de Dessin Intégré : Fournir une zone de dessin (Canvas) permettant à l'utilisateur de tracer des formes géométriques simples manuellement.
-- Gestion des Calques (Mobile-First) : Intégrer un panneau de calques basique pour superposer différentes formes. Le réarrangement de ces calques doit impérativement utiliser une API Drag-and-Drop compatible avec les événements tactiles (Touch Events) pour garantir l'utilisabilité sur terminaux mobiles.
+ONGLET DÉDIÉ À LA CONVERSION RASTER → SINGLE-LINE ART:
+- Import et conversion d'une image Raster/Bitmap en un tracé vectoriel unique.
+- Extrapole les autres fonctionnalités de cet onglet. Il n'est pas nécessaire de les expliciter ici.
+
+C. DESSIN MANUEL ET RÉALISATION DIRECTE (JOGGING & DRAWING) :
+- Outil de Dessin Intégré : Fournir une zone de dessin (Canvas) permettant à l'utilisateur de tracer des formes géométriques simples manuellement, ainsi qu'un outil de dessin libre (pinceau).
+- Gestion des Calques : Intégrer un panneau de calques basique pour superposer différentes formes. Le réarrangement de ces calques doit impérativement utiliser une API Drag-and-Drop compatible avec les événements tactiles (Touch Events) pour garantir l'utilisabilité sur terminaux mobiles.
+
+D. CONTRÔLE MANUEL
 - Panneau de Jogging (D-Pad) : Implémenter un contrôleur directionnel virtuel pour piloter manuellement la machine.
   - Axes X/Y : Croix directionnelle.
-  - Axe Z : Boutons explicites "Monter Stylo" (Z_UP) et "Descendre Stylo" (Z_DOWN).
+  - Axe Z : Boutons explicites "Monter Stylo" (Z_UP) et "Descendre Stylo" (Z_DOWN), en rappelant qu'il s'agit des positions prédéfinis dans les paramètres et non pas d'un jog.
+  - Position absolue X,Y,Z avec option de déplacement (delta) uniquement.
   - Incréments : Sélecteur de pas avec des valeurs prédéfinies (0.1 mm, 1 mm, 10 mm, 50 mm).
+  - Calibrage Z : Une interface pour calibrer et définir Z_UP et Z_DOWN via incréments manuels ou entrée manuelle de coordonnées ou de deltas.
 - Arrêt d'Urgence (E-Stop) : 
   - Bouton critique, rouge, persistant et toujours visible à l'écran.
   - Comportement logiciel : Mettre fin immédiatement à l'envoi de commandes, purger (vider) la file d'attente JavaScript, et envoyer le caractère d'interruption défini dans le firmware.
   - Rendu visuel : Actualiser instantanément le Canvas de prévisualisation pour n'afficher *que* les segments ayant été physiquement tracés avant le déclenchement de l'arrêt, figeant ainsi l'état d'avancement réel.
 
-D. TÉLÉMÉTRIE ET CONFIGURATION SYSTÈME :
+E. TÉLÉMÉTRIE ET CONFIGURATION SYSTÈME :
 - Console Série Intégrée : Panneau rétractable (latéral ou inférieur) agissant comme un moniteur série.
   - Affichage détaillé : Lignes TX (envoyées) et RX (reçues), précédées d'un horodatage (timestamp) précis.
   - Filtres interactifs : Cases à cocher pour n'afficher que "Tout", "Commandes envoyées (TX)", ou "Erreurs".
