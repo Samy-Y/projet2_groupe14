@@ -276,6 +276,29 @@ header {
     box-shadow: 0 0px 0 var(--color-danger-shadow);
 }
 
+/* Bouton « Erreur corrigée » — visible uniquement en état ERROR */
+.btn-clear-error {
+    width: 100%;
+    padding: 12px 16px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    border-radius: 6px;
+    background: linear-gradient(135deg, #e67e22, #d4690f);
+    color: #fff;
+    box-shadow: 0 4px 0 #a0510a;
+    animation: clearErrorPulse 1.5s ease-in-out infinite;
+}
+
+.btn-clear-error:active {
+    top: 4px;
+    box-shadow: 0 0px 0 #a0510a;
+}
+
+@keyframes clearErrorPulse {
+    0%, 100% { box-shadow: 0 4px 0 #a0510a, 0 0 0 0 rgba(230, 126, 34, 0.45); }
+    50% { box-shadow: 0 4px 0 #a0510a, 0 0 0 6px rgba(230, 126, 34, 0); }
+}
+
 /* -- Status Badges -- */
 .status-badge {
     padding: 8px;
@@ -1267,4 +1290,71 @@ kbd {
     margin-top: 6px;
     display: flex;
     gap: 8px;
-}
+}
+
+/* ── Indicateur de position du stylo (mode Auto) ─────────────────────── */
+.pen-state-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: background 0.25s, color 0.25s, box-shadow 0.25s;
+    user-select: none;
+}
+
+/* Stylo LEVÉ : fond vert clair, texte vert foncé */
+.pen-state-badge.pen-up {
+    background: rgba(39, 174, 96, 0.18);
+    border: 1.5px solid rgba(39, 174, 96, 0.55);
+    color: #1a6e40;
+}
+
+.pen-state-badge.pen-up i {
+    color: #27ae60;
+}
+
+/* Stylo BAISSÉ : fond orange-rouge vif, animation pulsante */
+.pen-state-badge.pen-down {
+    background: rgba(231, 76, 60, 0.20);
+    border: 1.5px solid rgba(231, 76, 60, 0.65);
+    color: #8b1a1a;
+    animation: penDownPulse 0.9s ease-in-out infinite;
+}
+
+.pen-state-badge.pen-down i {
+    color: #e74c3c;
+}
+
+@keyframes penDownPulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.45);
+        background: rgba(231, 76, 60, 0.20);
+    }
+    50% {
+        box-shadow: 0 0 0 5px rgba(231, 76, 60, 0);
+        background: rgba(231, 76, 60, 0.35);
+    }
+}
+
+/* -- Bounding box SVG (coins extrémaux) -- */
+.svg-bbox-info {
+    margin-top: 8px;
+    padding: 5px 10px;
+    background: linear-gradient(90deg, rgba(0,86,179,0.08), rgba(0,86,179,0.03));
+    border: 1px solid rgba(0,86,179,0.25);
+    border-radius: 5px;
+    font-size: 0.82rem;
+    color: #0a3d6b;
+    font-family: monospace;
+    letter-spacing: 0.02em;
+}
+
+.svg-bbox-info i {
+    color: var(--color-primary);
+    margin-right: 4px;
+}
+

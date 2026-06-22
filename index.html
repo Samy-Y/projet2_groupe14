@@ -121,6 +121,8 @@
                                     <p id="stat-confirmed-line" class="hidden stat-confirmed">Confirmés : <span
                                             id="stat-confirmed-segs">0 / 0</span></p>
                                 </div>
+                                <!-- Coins extrémaux du SVG chargé -->
+                                <div id="svg-bbox-info" class="svg-bbox-info" style="display:none;"></div>
 
                                 <!-- Hachures de remplissage -->
                                 <div class="hatch-group">
@@ -300,6 +302,9 @@
                             <span class="twin-badge"><i class="fas fa-satellite-dish"></i> JUMEAU ACTIF</span>
                             <span>Segments confirmés : <strong id="plot-stat-segs">0</strong></span>
                             <span class="eta-label">ETA restant : <strong id="plot-stat-eta">--</strong></span>
+                            <span id="pen-state-badge" class="pen-state-badge pen-up">
+                                <i class="fas fa-arrow-up"></i> Stylo <strong>LEVÉ</strong>
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -424,6 +429,10 @@
             </button>
             <div id="connection-status" class="status-badge disconnected">Déconnecté</div>
             <div id="machine-state" class="machine-state">IDLE</div>
+            <button id="btn-clear-error" class="btn btn-clear-error hidden"
+                title="Acquitter l'erreur et repasser en IDLE">
+                <i class="fas fa-check-circle"></i> <span>Erreur corrigée</span>
+            </button>
 
             <button id="btn-estop" class="btn btn-danger btn-estop" title="ARRET D'URGENCE [Shift+S]">
                 <i class="fas fa-radiation"></i> <span>ARRET D'URGENCE (<u>S</u>TOP)</span>
@@ -509,10 +518,12 @@
                     <label>Vitesse Tracé G1 (RPM) : <input type="number" id="cfg-vdraw" value="40"></label>
                 </div>
                 <div class="form-group">
-                    <label>Hauteur Z "PLUME LEVÉE" (mm) : <input type="number" id="cfg-zup" value="5"></label>
+                    <label>Hauteur Z "PLUME LEVÉE" (mm) <small class="text-muted">(proche de 0, origine haute)</small> :
+                        <input type="number" id="cfg-zup" value="0"></label>
                 </div>
                 <div class="form-group">
-                    <label>Hauteur Z "PLUME BAISSÉE" (mm) : <input type="number" id="cfg-zdown" value="0"></label>
+                    <label>Hauteur Z "PLUME BAISSÉE" (mm) <small class="text-muted">(delta positif = descente vers
+                            papier, ex: 10)</small> : <input type="number" id="cfg-zdown" value="10"></label>
                 </div>
                 <hr>
                 <div class="form-group">
@@ -554,25 +565,30 @@
             </div>
             <div class="modal-body text-center">
                 <p>Ajustez finement la hauteur du stylo pour définir les positions de tracé et de dégagement.</p>
+                <!-- small note -->
+                <span class="text-muted">Un déplacement <i>positif</i> selon Z représente une <i>descente</i> du
+                    stylo.</span>
+
 
                 <h3 class="mt-2" style="font-size: 2em; margin: 10px 0;">Z = <span id="probe-z-val">--</span> mm</h3>
 
                 <div class="jog-controls mt-2" style="justify-content: center; gap: 10px; display: flex;">
                     <div style="display: flex; flex-direction: column; gap: 5px;">
-                        <button class="btn btn-secondary btn-jog-z" data-val="10"><i class="fas fa-angle-double-up"></i>
+                        <button class="btn btn-secondary btn-jog-z" data-val="10"><i
+                                class="fas fa-angle-double-down"></i>
                             +10 mm</button>
-                        <button class="btn btn-secondary btn-jog-z" data-val="1"><i class="fas fa-angle-up"></i> +1
+                        <button class="btn btn-secondary btn-jog-z" data-val="1"><i class="fas fa-angle-down"></i> +1
                             mm</button>
-                        <button class="btn btn-secondary btn-jog-z" data-val="0.1"><i class="fas fa-chevron-up"></i>
+                        <button class="btn btn-secondary btn-jog-z" data-val="0.1"><i class="fas fa-chevron-down"></i>
                             +0.1 mm</button>
                     </div>
                     <div style="display: flex; flex-direction: column; gap: 5px;">
-                        <button class="btn btn-secondary btn-jog-z" data-val="-0.1"><i class="fas fa-chevron-down"></i>
+                        <button class="btn btn-secondary btn-jog-z" data-val="-0.1"><i class="fas fa-chevron-up"></i>
                             -0.1 mm</button>
-                        <button class="btn btn-secondary btn-jog-z" data-val="-1"><i class="fas fa-angle-down"></i> -1
+                        <button class="btn btn-secondary btn-jog-z" data-val="-1"><i class="fas fa-angle-up"></i> -1
                             mm</button>
                         <button class="btn btn-secondary btn-jog-z" data-val="-10"><i
-                                class="fas fa-angle-double-down"></i> -10 mm</button>
+                                class="fas fa-angle-double-up"></i> -10 mm</button>
                     </div>
                 </div>
 

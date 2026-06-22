@@ -21,13 +21,14 @@ let keepReading = true;
 // File d'attente d'instructions série
 let txQueue = [];
 let waitingForOk = false;
+let _okDebounce = null;  // Timer pour absorber les doubles-OK du firmware
 
 // Télémétrie
 let isPaperConfigured = false;
 let checklistDone = false;
 
 // Géométrie
-let svgPolylines = []; 
+let svgPolylines = [];
 let _rawSvgPolylines = [];    // polylines brutes haute résolution (avant filtre d'échelle)
 let _rawHatchPolylines = [];  // hachures brutes haute résolution
 let scaleFactor = 1;
@@ -51,16 +52,16 @@ let totalHatchSegments = 0;
 let magnetEnabled = true;
 let hatchPreviewColorKey = 'blue';
 const HATCH_COLORS = {
-    blue:   'rgba(21,101,192,0.60)',
-    cyan:   'rgba(2,136,209,0.60)',
-    teal:   'rgba(0,137,123,0.60)',
-    green:  'rgba(46,125,50,0.60)',
+    blue: 'rgba(21,101,192,0.60)',
+    cyan: 'rgba(2,136,209,0.60)',
+    teal: 'rgba(0,137,123,0.60)',
+    green: 'rgba(46,125,50,0.60)',
     purple: 'rgba(106,27,154,0.60)',
-    rose:   'rgba(233,30,99,0.60)',
-    red:    'rgba(198,40,40,0.60)',
-    brown:  'rgba(93,64,55,0.60)',
-    slate:  'rgba(69,90,100,0.60)',
-    amber:  'rgba(180,110,10,0.55)',
+    rose: 'rgba(233,30,99,0.60)',
+    red: 'rgba(198,40,40,0.60)',
+    brown: 'rgba(93,64,55,0.60)',
+    slate: 'rgba(69,90,100,0.60)',
+    amber: 'rgba(180,110,10,0.55)',
 };
 
 // SVG parsing (main-thread natif)
@@ -72,6 +73,10 @@ let okCount = 0;          // Nb de OK reçus depuis début du tracé
 let plotStartTime = null; // Timestamp démarrage tracé
 let simulationTimer = null; // Timer simulation
 let animFrameId = null;   // ID requestAnimationFrame (tête pulsante)
+
+// Garde-fou stylo : état LOGIQUE du stylo (levé = false / baissé = true)
+// Utilisé dans _executePlotting pour éviter les doubles up/down consécutifs.
+let penIsDown = false;
 
 // Audio Context (pour fallbacks internes sans internet)
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -85,31 +90,32 @@ document.addEventListener('DOMContentLoaded', () => {
     initSettingsOverrides();
     initKeyboardShortcuts();
     initNetworkMonitor();
-    
+
     // Binding des boutons
     document.getElementById('btn-connect').addEventListener('click', toggleConnection);
     document.getElementById('btn-estop').addEventListener('click', () => triggerEStop('Manuel'));
+    document.getElementById('btn-clear-error').addEventListener('click', clearError);
     document.getElementById('btn-clear-console').addEventListener('click', clearConsole);
-    
+
     // Settings
     document.getElementById('nav-settings').addEventListener('click', () => { document.getElementById('modal-settings').classList.remove('hidden'); });
     document.getElementById('btn-close-settings').addEventListener('click', () => { document.getElementById('modal-settings').classList.add('hidden'); });
     document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
-    
+
     // Checklist
     document.getElementById('btn-checklist').addEventListener('click', () => { document.getElementById('modal-checklist').classList.remove('hidden'); });
     document.getElementById('btn-close-checklist').addEventListener('click', () => { document.getElementById('modal-checklist').classList.add('hidden'); });
-    
+
     // Quickstart
     document.getElementById('btn-quickstart').addEventListener('click', () => {
         document.getElementById('nav-guide').click();
     });
-    
+
     const chkPower = document.getElementById('chk-power');
     const chkPen = document.getElementById('chk-pen');
     const chkClear = document.getElementById('chk-clear');
     const btnValidateChecklist = document.getElementById('btn-validate-checklist');
-    
+
     const validateCheck = () => {
         btnValidateChecklist.disabled = !(chkPower.checked && chkPen.checked && chkClear.checked);
     };
@@ -120,7 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateUIState();
         showToast("Checklist validée.", "success");
     });
-    
+
     // Auto Mode 
     document.getElementById('svg-file').addEventListener('change', handleSvgUpload);
     document.getElementById('invert-y').addEventListener('change', reparseSVG);
@@ -166,7 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     // Espacement min hachures
     document.getElementById('hatch-spacing-min').addEventListener('change', reparseSVG);
-    
+
     // Placement Controls
     document.getElementById('paper-format').addEventListener('change', handlePaperChange);
     // Champs manuels position/angle de la feuille
@@ -229,7 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initTransformHandles();
 
     // Manual
-    document.getElementById('btn-homing').addEventListener('click', () => queueCommand('i'));
+    document.getElementById('btn-homing').addEventListener('click', () => {
+        queueCommand('k');
+        queueCommand('i');
+
+    });
     document.querySelectorAll('.btn-jog').forEach(btn => {
         btn.addEventListener('click', (e) => {
             let axis = e.currentTarget.dataset.axis;
@@ -240,20 +250,32 @@ document.addEventListener('DOMContentLoaded', () => {
             queueCommand(`${axis.toLowerCase()}${val}v${rpm}`);
         });
     });
-    
+
     // Suivi basique pour manuel (approximation)
+    // Convention : delta Z positif = descente du stylo (vers le papier)
+    //              delta Z négatif = montée du stylo (vers l'origine haute)
     let isZUp = true;
     document.getElementById('btn-z-up').addEventListener('click', () => {
-        let ztarget = loadSettings().zup;
-        let dz = ztarget - currentMachineZ;
-        if(Math.abs(dz) > 0.01) queueCommand(`z${dz.toFixed(2)}v${loadSettings().vfast}`);
+        // Monter le stylo : aller vers la position zup
+        let s = loadSettings();
+        let ztarget = s.zup;
+        let dz = ztarget - currentMachineZ; // négatif si on remonte (zup < currentMachineZ)
+        if (Math.abs(dz) > 0.01) {
+            queueCommand(`z${dz.toFixed(2)}v${s.vfast}`);
+            currentMachineZ = ztarget; // Suivi local immédiat pour éviter les valeurs aberrantes
+        }
         isZUp = true;
         queueCommand('s');
     });
     document.getElementById('btn-z-down').addEventListener('click', () => {
-        let ztarget = loadSettings().zdown;
-        let dz = ztarget - currentMachineZ;
-        if(Math.abs(dz) > 0.01) queueCommand(`z${dz.toFixed(2)}v${loadSettings().vfast}`);
+        // Descendre le stylo : aller vers la position zdown
+        let s = loadSettings();
+        let ztarget = s.zdown;
+        let dz = ztarget - currentMachineZ; // positif si on descend (zdown > currentMachineZ)
+        if (Math.abs(dz) > 0.01) {
+            queueCommand(`z${dz.toFixed(2)}v${s.vfast}`);
+            currentMachineZ = ztarget; // Suivi local immédiat
+        }
         isZUp = false;
         queueCommand('s');
     });
@@ -270,9 +292,22 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.btn-jog-z').forEach(btn => {
         btn.addEventListener('click', (e) => {
             let val = parseFloat(e.currentTarget.dataset.val);
-            let rpm = loadSettings().vfast;
-            queueCommand(`z${val}v${rpm}`);
-            queueCommand('s'); 
+            let s = loadSettings();
+            let rpm = s.vfast;
+            let newZ = currentMachineZ + val;
+            // Clamp dans les limites
+            newZ = Math.max(0, Math.min(s.zmax, newZ));
+            let actualDelta = newZ - currentMachineZ;
+            if (Math.abs(actualDelta) > 0.001) {
+                queueCommand(`z${actualDelta.toFixed(2)}v${rpm}`);
+                currentMachineZ = newZ; // Suivi local immédiat
+                // Mettre à jour l'affichage Z dans la modale de probe immédiatement
+                const probeZVal = document.getElementById('probe-z-val');
+                if (probeZVal && !document.getElementById('modal-z-probe').classList.contains('hidden')) {
+                    probeZVal.innerText = currentMachineZ.toFixed(2);
+                }
+            }
+            queueCommand('s');
         });
     });
 
@@ -280,10 +315,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let s = loadSettings();
         s.zdown = currentMachineZ;
         localStorage.setItem('systemSettings', JSON.stringify(s));
-        initSettingsOverrides(); 
+        initSettingsOverrides();
         showToast("Z Stylo Baissé défini à " + currentMachineZ.toFixed(2) + "mm", "success");
     });
-    
+
     document.getElementById('btn-set-z-up').addEventListener('click', () => {
         let s = loadSettings();
         s.zup = currentMachineZ;
@@ -324,7 +359,7 @@ function initNavigation() {
     const navBtns = document.querySelectorAll('.nav-btn');
     const views = document.querySelectorAll('.view');
     navBtns.forEach(btn => {
-        if(btn.id === 'nav-settings') return; // Settings is a modal
+        if (btn.id === 'nav-settings') return; // Settings is a modal
         btn.addEventListener('click', () => {
             navBtns.forEach(b => b.classList.remove('active'));
             views.forEach(v => v.classList.add('hidden'));
@@ -359,6 +394,36 @@ function initTransformHandles() {
         wrapperEl._resizeObserver = ro;
     }
 
+    // ── Affichage des coordonnées du curseur en mm réels ──────────────────
+    const cursorOverlay = document.createElement('div');
+    cursorOverlay.id = 'canvas-cursor-overlay';
+    cursorOverlay.style.cssText = `
+        position:absolute; bottom:6px; left:6px; z-index:10;
+        background:rgba(0,0,0,0.62); color:#fff;
+        font-family:monospace; font-size:11px;
+        padding:3px 8px; border-radius:5px;
+        pointer-events:none; display:none;
+        white-space:nowrap; letter-spacing:0.02em;
+    `;
+    if (wrapperEl) {
+        wrapperEl.style.position = 'relative';
+        wrapperEl.appendChild(cursorOverlay);
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const s = loadSettings();
+        const relX = (e.clientX - rect.left) / rect.width;   // 0..1
+        const relY = (e.clientY - rect.top) / rect.height;   // 0..1
+        const mmX = (relX * s.xmax).toFixed(1);
+        const mmY = (relY * s.ymax).toFixed(1);
+        cursorOverlay.style.display = 'block';
+        cursorOverlay.textContent = `X: ${mmX} mm  Y: ${mmY} mm`;
+    });
+    canvas.addEventListener('mouseleave', () => {
+        cursorOverlay.style.display = 'none';
+    });
+
     // ── Helpers ────────────────────────────────────────────────────────────
     function getTransformedBBox(W, H) {
         if (svgPolylines.length === 0) return null;
@@ -381,8 +446,10 @@ function initTransformHandles() {
             });
         });
         if (!isFinite(minX)) return null;
-        return { minX, minY, maxX, maxY,
-            cxPx: (minX + maxX) / 2, cyPx: (minY + maxY) / 2 };
+        return {
+            minX, minY, maxX, maxY,
+            cxPx: (minX + maxX) / 2, cyPx: (minY + maxY) / 2
+        };
     }
 
     const HR = 7;
@@ -391,9 +458,9 @@ function initTransformHandles() {
     function getHandlePositions(bbox) {
         const { minX, minY, maxX, maxY, cxPx, cyPx } = bbox;
         return {
-            nw: { x: minX, y: minY }, n:  { x: cxPx, y: minY }, ne: { x: maxX, y: minY },
-            e:  { x: maxX, y: cyPx }, se: { x: maxX, y: maxY }, s:  { x: cxPx, y: maxY },
-            sw: { x: minX, y: maxY }, w:  { x: minX, y: cyPx },
+            nw: { x: minX, y: minY }, n: { x: cxPx, y: minY }, ne: { x: maxX, y: minY },
+            e: { x: maxX, y: cyPx }, se: { x: maxX, y: maxY }, s: { x: cxPx, y: maxY },
+            sw: { x: minX, y: maxY }, w: { x: minX, y: cyPx },
             rot: { x: cxPx, y: minY - ROT_OFFSET }
         };
     }
@@ -419,8 +486,8 @@ function initTransformHandles() {
                 if (nearX) { ctx.strokeStyle = 'rgba(16,185,129,0.80)'; ctx.beginPath(); ctx.moveTo(pCxPx, 0); ctx.lineTo(pCxPx, H); ctx.stroke(); }
                 if (nearY) { ctx.strokeStyle = 'rgba(16,185,129,0.80)'; ctx.beginPath(); ctx.moveTo(0, pCyPx); ctx.lineTo(W, pCyPx); ctx.stroke(); }
                 ctx.setLineDash([]); ctx.strokeStyle = '#10b981'; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(pCxPx-10,pCyPx); ctx.lineTo(pCxPx+10,pCyPx); ctx.moveTo(pCxPx,pCyPx-10); ctx.lineTo(pCxPx,pCyPx+10); ctx.stroke();
-                ctx.beginPath(); ctx.arc(pCxPx, pCyPx, 5, 0, Math.PI*2); ctx.lineWidth = 1.5; ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(pCxPx - 10, pCyPx); ctx.lineTo(pCxPx + 10, pCyPx); ctx.moveTo(pCxPx, pCyPx - 10); ctx.lineTo(pCxPx, pCyPx + 10); ctx.stroke();
+                ctx.beginPath(); ctx.arc(pCxPx, pCyPx, 5, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
                 ctx.restore();
             }
         }
@@ -429,20 +496,20 @@ function initTransformHandles() {
         const handles = getHandlePositions(bbox);
 
         ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = 'rgba(0,86,179,0.65)'; ctx.lineWidth = 1.5;
-        ctx.strokeRect(bbox.minX, bbox.minY, bbox.maxX-bbox.minX, bbox.maxY-bbox.minY); ctx.restore();
+        ctx.strokeRect(bbox.minX, bbox.minY, bbox.maxX - bbox.minX, bbox.maxY - bbox.minY); ctx.restore();
 
-        ctx.beginPath(); ctx.strokeStyle = 'rgba(224,168,0,0.7)'; ctx.lineWidth = 1.5; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.strokeStyle = 'rgba(224,168,0,0.7)'; ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
         ctx.moveTo(handles.n.x, handles.n.y); ctx.lineTo(handles.rot.x, handles.rot.y); ctx.stroke(); ctx.setLineDash([]);
 
-        ['nw','n','ne','e','se','s','sw','w'].forEach(k => {
+        ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(k => {
             const h = handles[k];
             ctx.fillStyle = '#fff'; ctx.strokeStyle = '#0056b3'; ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.rect(h.x-HR, h.y-HR, HR*2, HR*2); ctx.fill(); ctx.stroke();
+            ctx.beginPath(); ctx.rect(h.x - HR, h.y - HR, HR * 2, HR * 2); ctx.fill(); ctx.stroke();
         });
 
-        ctx.beginPath(); ctx.arc(handles.rot.x, handles.rot.y, HR+1, 0, Math.PI*2);
+        ctx.beginPath(); ctx.arc(handles.rot.x, handles.rot.y, HR + 1, 0, Math.PI * 2);
         ctx.fillStyle = '#fff'; ctx.strokeStyle = '#e0a800'; ctx.lineWidth = 2.5; ctx.fill(); ctx.stroke();
-        ctx.beginPath(); ctx.arc(handles.rot.x, handles.rot.y, 4, 0, Math.PI*2); ctx.fillStyle = '#e0a800'; ctx.fill();
+        ctx.beginPath(); ctx.arc(handles.rot.x, handles.rot.y, 4, 0, Math.PI * 2); ctx.fillStyle = '#e0a800'; ctx.fill();
     }
 
     // ── Coordonnées souris → pixels canvas (gérant CSS scaling) ────────────
@@ -452,7 +519,7 @@ function initTransformHandles() {
         const scaleY = canvas.height / rect.height;
         return {
             x: (e.clientX - rect.left) * scaleX,
-            y: (e.clientY - rect.top)  * scaleY
+            y: (e.clientY - rect.top) * scaleY
         };
     }
 
@@ -464,7 +531,7 @@ function initTransformHandles() {
         const HIT = HR + 5;
 
         if (Math.hypot(mx - handles.rot.x, my - handles.rot.y) < HIT + 2) return 'rotate';
-        for (const k of ['nw','n','ne','e','se','s','sw','w']) {
+        for (const k of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
             if (Math.abs(mx - handles[k].x) < HIT && Math.abs(my - handles[k].y) < HIT) return 'resize-' + k;
         }
 
@@ -486,7 +553,7 @@ function initTransformHandles() {
         'rotate': 'crosshair', 'move': 'move', 'paper': 'grab'
     };
 
-    let dragMode = null, dragStart = { x:0, y:0 }, startVals = {}, rotCenter = { x:0, y:0 };
+    let dragMode = null, dragStart = { x: 0, y: 0 }, startVals = {}, rotCenter = { x: 0, y: 0 };
 
     canvas.addEventListener('mousedown', (e) => {
         const { x: mx, y: my } = canvasMouseCoords(e);
@@ -557,12 +624,12 @@ function initTransformHandles() {
         } else if (dragMode === 'rotate') {
             const a1 = Math.atan2(dragStart.y - rotCenter.y, dragStart.x - rotCenter.x);
             const a2 = Math.atan2(my - rotCenter.y, mx - rotCenter.x);
-            rotationAngle = startVals.rotationAngle + (a2-a1)*180/Math.PI;
+            rotationAngle = startVals.rotationAngle + (a2 - a1) * 180 / Math.PI;
             document.getElementById('rotation-input').value = rotationAngle.toFixed(1);
         } else if (dragMode && dragMode.startsWith('resize')) {
-            const dist1 = Math.hypot(dragStart.x-rotCenter.x, dragStart.y-rotCenter.y);
-            const dist2 = Math.hypot(mx-rotCenter.x, my-rotCenter.y);
-            if (dist1 > 2) { scaleFactor = Math.max(0.001, startVals.scaleFactor*(dist2/dist1)); document.getElementById('scale-input').value = (scaleFactor*100).toFixed(1); }
+            const dist1 = Math.hypot(dragStart.x - rotCenter.x, dragStart.y - rotCenter.y);
+            const dist2 = Math.hypot(mx - rotCenter.x, my - rotCenter.y);
+            if (dist1 > 2) { scaleFactor = Math.max(0.001, startVals.scaleFactor * (dist2 / dist1)); document.getElementById('scale-input').value = (scaleFactor * 100).toFixed(1); }
         }
         drawPreviewCanvas();
     });
@@ -587,9 +654,12 @@ function initTransformHandles() {
 // ==========================================
 
 function loadSettings() {
-    const def = { xmax: 400, ymax: 400, zmax: 100, vfast: 100, vdraw: 40, zup: 5, zdown: 0, calib: 1.0 };
+    // zup  = position Z stylo LEVÉ  (proche de l'origine haute, ex: 0 mm)
+    // zdown = position Z stylo BAISSÉ (descendu vers la feuille, delta positif depuis l'origine, ex: 10 mm)
+    // Un delta Z positif = DESCENTE du stylo (convention Arduino : fin de course en haut = origine)
+    const def = { xmax: 400, ymax: 400, zmax: 100, vfast: 100, vdraw: 40, zup: 0, zdown: 10, calib: 1.0 };
     const saved = localStorage.getItem('systemSettings');
-    return saved ? {...def, ...JSON.parse(saved)} : def;
+    return saved ? { ...def, ...JSON.parse(saved) } : def;
 }
 
 function initSettingsOverrides() {
@@ -599,6 +669,7 @@ function initSettingsOverrides() {
     document.getElementById('cfg-zmax').value = s.zmax;
     document.getElementById('cfg-vfast').value = s.vfast;
     document.getElementById('cfg-vdraw').value = s.vdraw;
+    // zup = position stylo levé (ex: 0 = origine haute), zdown = position stylo baissé (ex: 10mm)
     document.getElementById('cfg-zup').value = s.zup;
     document.getElementById('cfg-zdown').value = s.zdown;
     document.getElementById('cfg-calib').value = s.calib;
@@ -627,7 +698,7 @@ function saveSettings() {
 function initNetworkMonitor() {
     const updateNetStat = () => {
         const span = document.getElementById('network-status');
-        if(navigator.onLine) {
+        if (navigator.onLine) {
             span.innerHTML = '<i class="fas fa-wifi"></i> En ligne';
             span.classList.remove('offline-mode');
         } else {
@@ -641,7 +712,7 @@ function initNetworkMonitor() {
     updateNetStat();
 }
 
-function showToast(msg, type="info") {
+function showToast(msg, type = "info") {
     const container = document.getElementById('toast-container');
     const t = document.createElement('div');
     t.className = `toast ${type}`;
@@ -654,13 +725,13 @@ function showToast(msg, type="info") {
 }
 
 function playBeep(type) {
-    if(audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    
-    if(type === 'error') {
+
+    if (type === 'error') {
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(150, audioCtx.currentTime);
         gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
@@ -682,7 +753,7 @@ function playBeep(type) {
 // ==========================================
 
 async function toggleConnection() {
-    if(!isConnected) {
+    if (!isConnected) {
         if (!('serial' in navigator)) {
             showToast("WebSerial non supporté par ce navigateur.", "error"); return;
         }
@@ -691,18 +762,18 @@ async function toggleConnection() {
             await serialPort.open({ baudRate: 115200 });
             isConnected = true;
             keepReading = true;
-            
+
             serialWriter = serialPort.writable.getWriter();
             readLoop();
 
             document.getElementById('connection-status').innerText = 'Connecté';
             document.getElementById('connection-status').classList.remove('disconnected');
             document.getElementById('connection-status').classList.add('connected');
-            document.getElementById('btn-connect').innerHTML = '<i class="fas fa-plug"></i> Déconnecter';
-            
+            document.getElementById('btn-connect').innerHTML = '<i class="fas fa-plug"></i> <span>Déconnecter <u>U</u>SB</span>';
+
             showToast("Connecté à la carte !", "success");
             changeState(SystemState.IDLE);
-        } catch(e) {
+        } catch (e) {
             console.error(e);
             showToast("Erreur de connexion", "error");
         }
@@ -714,14 +785,14 @@ async function toggleConnection() {
 async function disconnect() {
     keepReading = false;
     isConnected = false;
-    if(serialReader) { await serialReader.cancel(); }
-    if(serialWriter) { await serialWriter.close(); }
-    if(serialPort) { await serialPort.close(); serialPort = null; }
-    
+    if (serialReader) { await serialReader.cancel(); }
+    if (serialWriter) { await serialWriter.close(); }
+    if (serialPort) { await serialPort.close(); serialPort = null; }
+
     document.getElementById('connection-status').innerText = 'Déconnecté';
     document.getElementById('connection-status').classList.add('disconnected');
     document.getElementById('connection-status').classList.remove('connected');
-    document.getElementById('btn-connect').innerHTML = '<i class="fas fa-plug"></i> Connecter <u>U</u>SB';
+    document.getElementById('btn-connect').innerHTML = '<i class="fas fa-plug"></i> <span>Connecter <u>U</u>SB</span>';
     changeState(SystemState.IDLE);
 }
 
@@ -741,7 +812,7 @@ async function readLoop() {
                 buffer = lines.pop(); // keep incomplete line
                 lines.forEach(line => {
                     line = line.trim();
-                    if(line.length > 0) handleHardwareResponse(line);
+                    if (line.length > 0) handleHardwareResponse(line);
                 });
             }
         }
@@ -759,15 +830,21 @@ let pendingAbsoluteMove = null;
 
 function handleHardwareResponse(line) {
     logConsole('rx', line);
-    
-    if(line.startsWith(">> X=")) {
+
+    if (line.startsWith(">> X=")) {
         // Ex: >> X=10.00mm Y=20.00mm Z=0.00mm  [0-400 / 0-100mm]
         const match = line.match(/X=([\d.-]+)mm\s+Y=([\d.-]+)mm\s+Z=([\d.-]+)mm/);
-        if(match) {
+        if (match) {
             currentMachineX = parseFloat(match[1]);
             currentMachineY = parseFloat(match[2]);
-            currentMachineZ = parseFloat(match[3]);
-            
+            // Mise à jour Z depuis le firmware : on prend la valeur réelle du firmware
+            // sauf si une commande Z est en attente dans la file (pour éviter régressions)
+            const fwZ = parseFloat(match[3]);
+            // On accepte la position firmware si la file est vide (aucun mouvement Z en cours)
+            if (txQueue.filter(c => c && c.startsWith('z')).length === 0) {
+                currentMachineZ = fwZ;
+            }
+
             const probeZVal = document.getElementById('probe-z-val');
             if (probeZVal && !document.getElementById('modal-z-probe').classList.contains('hidden')) {
                 probeZVal.innerText = currentMachineZ.toFixed(2);
@@ -776,11 +853,11 @@ function handleHardwareResponse(line) {
             if (pendingAbsoluteMove) {
                 const move = pendingAbsoluteMove;
                 pendingAbsoluteMove = null;
-                
+
                 let dx = move.x !== null ? move.x - currentMachineX : 0;
                 let dy = move.y !== null ? move.y - currentMachineY : 0;
                 let dz = move.z !== null ? move.z - currentMachineZ : 0;
-                
+
                 // On séquence d'abord XY puis Z pour éviter les collisions ou simplifier (comme le fw le fait séparément)
                 // Ou alors le système permet x y z ? Non, x..y..v.. OU z..v..
                 if (dx !== 0 || dy !== 0) {
@@ -793,21 +870,43 @@ function handleHardwareResponse(line) {
         }
     }
 
-    if(line === "OK") {
+    if (line === "OK") {
+        // ── Debounce OK ──────────────────────────────────────────────────
+        // Le firmware envoie DEUX "OK" pour chaque commande de mouvement
+        // (un dans afficherPosition() + un sendOk() explicite).
+        // On regroupe tous les OK rapprochés en un seul événement.
+        if (_okDebounce) clearTimeout(_okDebounce);
+        _okDebounce = setTimeout(() => {
+            _okDebounce = null;
+            waitingForOk = false;
+            if (currentState === SystemState.RUNNING && commandMap.length > 0) {
+                onOkReceived();
+            }
+            processQueue();
+        }, 8);
+    } else if (line === "ERR") {
+        // ── Gestion ERR : empêcher le deadlock ──────────────────────────
+        // Le firmware envoie ERR sans OK. Sans traitement, waitingForOk
+        // reste true et la file se bloque définitivement.
+        if (_okDebounce) { clearTimeout(_okDebounce); _okDebounce = null; }
         waitingForOk = false;
-        if(currentState === SystemState.RUNNING && commandMap.length > 0) {
-            onOkReceived();
+        logConsole('err', 'Commande rejetée par le firmware (ERR)');
+        showToast('Commande série rejetée (ERR)', 'warning');
+        if (currentState === SystemState.RUNNING && commandMap.length > 0) {
+            onOkReceived(); // Avance le compteur pour garder la synchronisation
         }
         processQueue();
     } else if (line.indexOf("LIMIT") === 0) {
         triggerEStop(line);
     } else if (line.indexOf("===") === 0) {
         document.getElementById('firmware-version').innerText = line;
+    } else if (line.indexOf("!!! ARRET") !== -1) {
+        // Confirmation d'arrêt d'urgence par le firmware — juste loggée
     }
 }
 
 async function sendData(str) {
-    if(!serialWriter) return;
+    if (!serialWriter) return;
     const data = new TextEncoder().encode(str + "\n");
     await serialWriter.write(data);
     logConsole('tx', str);
@@ -819,13 +918,13 @@ function queueCommand(cmd) {
 }
 
 function processQueue() {
-    if(!isConnected) return;
-    if(waitingForOk) return; // Wait for OK
-    if(txQueue.length === 0) {
-        if(currentState === SystemState.RUNNING) changeState(SystemState.IDLE);
+    if (!isConnected) return;
+    if (waitingForOk) return; // Wait for OK
+    if (txQueue.length === 0) {
+        if (currentState === SystemState.RUNNING) changeState(SystemState.IDLE);
         return;
     }
-    
+
     let cmd = txQueue.shift();
     waitingForOk = true;
     sendData(cmd);
@@ -839,18 +938,18 @@ function changeState(newState) {
     currentState = newState;
     const badge = document.getElementById('machine-state');
     badge.innerText = currentState;
-    badge.style.background = 
-        currentState === 'ERROR'   ? '#c65050' : 
-        currentState === 'RUNNING' ? '#2e8b57' : 
-        currentState === 'HOMING'  ? '#0056b3' : '#eee';
+    badge.style.background =
+        currentState === 'ERROR' ? '#c65050' :
+            currentState === 'RUNNING' ? '#2e8b57' :
+                currentState === 'HOMING' ? '#0056b3' : '#eee';
     badge.style.color = currentState === 'IDLE' ? '#333' : '#fff';
-    
+
     // Réinitialise le jumeau si on revient à IDLE/ERROR
-    if(newState !== SystemState.RUNNING) {
+    if (newState !== SystemState.RUNNING) {
         stopTwinAnimation();
         document.getElementById('stat-eta').classList.remove('eta-running');
         document.getElementById('progress-bar').classList.remove('running-anim');
-        if(newState === SystemState.IDLE) {
+        if (newState === SystemState.IDLE) {
             // Redessine en mode normal après fin du tracé
             setTimeout(drawPreviewCanvas, 50);
         }
@@ -862,31 +961,48 @@ function triggerEStop(reason = 'Manuel') {
     if (typeof reason !== 'string') reason = 'Manuel';
     txQueue = []; // Purge
     waitingForOk = false;
+    if (_okDebounce) { clearTimeout(_okDebounce); _okDebounce = null; }
     stopSimulation();
     stopTwinAnimation();
+    penIsDown = false;  // Réinitialise l'indicateur stylo
+    updatePenStateIndicator();
     sendData('a'); // Arduino stop char
     changeState(SystemState.ERROR);
     playBeep('error');
     showToast(`ARRÊT D'URGENCE (${reason})`, "error");
 }
 
+function clearError() {
+    if (currentState !== SystemState.ERROR) return;
+    txQueue = [];
+    waitingForOk = false;
+    if (_okDebounce) { clearTimeout(_okDebounce); _okDebounce = null; }
+    changeState(SystemState.IDLE);
+    showToast('Erreur acquittée — machine en IDLE.', 'info');
+}
+
 function updateUIState() {
     const isReady = isConnected && currentState !== 'ERROR';
     const hasSvgReady = totalSegments > 0 && checklistDone;
     const isRunning = currentState === SystemState.RUNNING;
-    
+    const isError = currentState === SystemState.ERROR;
+
     document.querySelectorAll('.btn-jog').forEach(b => b.disabled = !isReady || isRunning);
     document.getElementById('btn-homing').disabled = !isReady || isRunning;
-    
+
     document.getElementById('btn-start-auto').disabled = !(isReady && hasSvgReady && currentState === 'IDLE');
-    
+
     // Bouton simulation : actif si SVG chargé et pas déjà en cours
     const btnSim = document.getElementById('btn-simulate');
-    if(btnSim) btnSim.disabled = !(totalSegments > 0 && !isRunning);
-    
+    if (btnSim) btnSim.disabled = !(totalSegments > 0 && !isRunning);
+
     // Affichage de la barre de statut du tracé
     const statusBar = document.getElementById('plot-status-bar');
-    if(statusBar) statusBar.classList.toggle('hidden', !isRunning);
+    if (statusBar) statusBar.classList.toggle('hidden', !isRunning);
+
+    // Bouton de récupération d'erreur
+    const btnClearErr = document.getElementById('btn-clear-error');
+    if (btnClearErr) btnClearErr.classList.toggle('hidden', !isError);
 }
 
 // ==========================================
@@ -912,7 +1028,7 @@ function parseSVGNative(svgContent, minSegLength, invertY, enableHatch, hatchSpa
         return { polylines: [], segments: 0, hatchPolylines: [], hatchSegments: 0 };
     }
     // S'assurer que le SVG a des dimensions réelles pour que getCTM fonctionne
-    svgEl.style.width  = svgEl.getAttribute('width')  || '800px';
+    svgEl.style.width = svgEl.getAttribute('width') || '800px';
     svgEl.style.height = svgEl.getAttribute('height') || '800px';
 
     // ── 2. Parcours de tous les éléments géométriques ─────────────────────
@@ -941,15 +1057,15 @@ function parseSVGNative(svgContent, minSegLength, invertY, enableHatch, hatchSpa
             if (tag === 'line') {
                 const x1 = el.x1.baseVal.value, y1 = el.y1.baseVal.value;
                 const x2 = el.x2.baseVal.value, y2 = el.y2.baseVal.value;
-                pts = [applyMatrix(x1,y1), applyMatrix(x2,y2)];
+                pts = [applyMatrix(x1, y1), applyMatrix(x2, y2)];
 
             } else if (tag === 'rect') {
                 const x = el.x.baseVal.value, y = el.y.baseVal.value;
                 const w = el.width.baseVal.value, h = el.height.baseVal.value;
                 if (w > 0 && h > 0) {
                     pts = [
-                        applyMatrix(x,y), applyMatrix(x+w,y),
-                        applyMatrix(x+w,y+h), applyMatrix(x,y+h), applyMatrix(x,y)
+                        applyMatrix(x, y), applyMatrix(x + w, y),
+                        applyMatrix(x + w, y + h), applyMatrix(x, y + h), applyMatrix(x, y)
                     ];
                 }
 
@@ -975,8 +1091,8 @@ function parseSVGNative(svgContent, minSegLength, invertY, enableHatch, hatchSpa
             if (pts.length > 1) {
                 const deduped = [pts[0]];
                 for (let i = 1; i < pts.length; i++) {
-                    if (Math.abs(pts[i].x - deduped[deduped.length-1].x) > 1e-6 ||
-                        Math.abs(pts[i].y - deduped[deduped.length-1].y) > 1e-6) {
+                    if (Math.abs(pts[i].x - deduped[deduped.length - 1].x) > 1e-6 ||
+                        Math.abs(pts[i].y - deduped[deduped.length - 1].y) > 1e-6) {
                         deduped.push(pts[i]);
                     }
                 }
@@ -1036,27 +1152,27 @@ function generateHatchesForShape(polygon, spacing, angleDeg) {
     if (polygon.length < 3 || spacing <= 0) return [];
     const angle = angleDeg * Math.PI / 180;
     const cosF = Math.cos(-angle), sinF = Math.sin(-angle);
-    const cosB = Math.cos(angle),  sinB = Math.sin(angle);
-    const rotated = polygon.map(p => ({ x: cosF*p.x - sinF*p.y, y: sinF*p.x + cosF*p.y }));
+    const cosB = Math.cos(angle), sinB = Math.sin(angle);
+    const rotated = polygon.map(p => ({ x: cosF * p.x - sinF * p.y, y: sinF * p.x + cosF * p.y }));
     let minY = Infinity, maxY = -Infinity;
-    rotated.forEach(p => { if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y; });
+    rotated.forEach(p => { if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; });
     const n = rotated.length;
     const startY = Math.ceil(minY / spacing) * spacing;
     const hatches = [];
     for (let scanY = startY; scanY <= maxY + 1e-9; scanY += spacing) {
         const xs = [];
         for (let i = 0; i < n; i++) {
-            const a = rotated[i], b = rotated[(i+1) % n];
+            const a = rotated[i], b = rotated[(i + 1) % n];
             if ((a.y <= scanY && b.y > scanY) || (b.y <= scanY && a.y > scanY)) {
                 xs.push(a.x + (scanY - a.y) / (b.y - a.y) * (b.x - a.x));
             }
         }
-        xs.sort((a,b) => a-b);
-        for (let i = 0; i+1 < xs.length; i += 2) {
-            if (xs[i+1] - xs[i] < 1e-9) continue;
+        xs.sort((a, b) => a - b);
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+            if (xs[i + 1] - xs[i] < 1e-9) continue;
             hatches.push([
-                { x: cosB*xs[i]   - sinB*scanY, y: sinB*xs[i]   + cosB*scanY },
-                { x: cosB*xs[i+1] - sinB*scanY, y: sinB*xs[i+1] + cosB*scanY }
+                { x: cosB * xs[i] - sinB * scanY, y: sinB * xs[i] + cosB * scanY },
+                { x: cosB * xs[i + 1] - sinB * scanY, y: sinB * xs[i + 1] + cosB * scanY }
             ]);
         }
     }
@@ -1080,8 +1196,8 @@ function parseColorString(str) {
     // Hex
     if (str.startsWith('#')) {
         let h = str.slice(1);
-        if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
-        return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16) };
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
     }
     // Pour les couleurs nommées, utilise un canvas temporaire
     try {
@@ -1089,15 +1205,15 @@ function parseColorString(str) {
         c.fillStyle = str;
         const hex = c.fillStyle; // retourne toujours en #rrggbb
         if (hex.startsWith('#')) return parseColorString(hex);
-    } catch(e) {}
+    } catch (e) { }
     return null;
 }
 
-function toGrayscale(c) { return 0.299*c.r + 0.587*c.g + 0.114*c.b; }
+function toGrayscale(c) { return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b; }
 function isPolyClosed(pts) {
     if (pts.length < 3) return false;
-    const f = pts[0], l = pts[pts.length-1];
-    return Math.hypot(f.x-l.x, f.y-l.y) < 1e-4;
+    const f = pts[0], l = pts[pts.length - 1];
+    return Math.hypot(f.x - l.x, f.y - l.y) < 1e-4;
 }
 
 // ── Optimisation d'ordre (Nearest-Neighbour) ──────────────────────────────
@@ -1108,9 +1224,9 @@ function optimizePathOrder(polylines) {
     while (unvisited.length > 0) {
         let bestDist = Infinity, bestIdx = -1, bestRev = false;
         for (let i = 0; i < unvisited.length; i++) {
-            const s = unvisited[i][0], e = unvisited[i][unvisited[i].length-1];
-            const ds = Math.hypot(s.x-cur.x, s.y-cur.y);
-            const de = Math.hypot(e.x-cur.x, e.y-cur.y);
+            const s = unvisited[i][0], e = unvisited[i][unvisited[i].length - 1];
+            const ds = Math.hypot(s.x - cur.x, s.y - cur.y);
+            const de = Math.hypot(e.x - cur.x, e.y - cur.y);
             if (ds < bestDist) { bestDist = ds; bestIdx = i; bestRev = false; }
             if (de < bestDist) { bestDist = de; bestIdx = i; bestRev = true; }
         }
@@ -1124,26 +1240,72 @@ function optimizePathOrder(polylines) {
 
 function reparseSVG() {
     if (!currentSvgContent) return;
-    const invertY   = document.getElementById('invert-y').checked;
-    const enableHatch  = document.getElementById('enable-hatch').checked;
-    const hatchSpacing    = parseFloat(document.getElementById('hatch-spacing').value) || 3;
+    const invertY = document.getElementById('invert-y').checked;
+    const enableHatch = document.getElementById('enable-hatch').checked;
+    const hatchSpacing = parseFloat(document.getElementById('hatch-spacing').value) || 3;
     const hatchSpacingMin = parseFloat(document.getElementById('hatch-spacing-min').value) || 0.35;
-    const hatchType       = document.getElementById('hatch-type').value;
+    const hatchType = document.getElementById('hatch-type').value;
 
     // Toujours parser à haute résolution (0.1 mm dans le repère SVG)
     const FINE_RESOLUTION = 0.1;
     const result = parseSVGNative(currentSvgContent, FINE_RESOLUTION, invertY, enableHatch, hatchSpacing, hatchType, hatchSpacingMin);
 
     // Stocker les polylines brutes haute résolution
-    _rawSvgPolylines   = result.polylines;
+    _rawSvgPolylines = result.polylines;
     _rawHatchPolylines = result.hatchPolylines;
 
     // Appliquer le filtre d'échelle (minSegLength en mm réels)
     applyScaleFilter();
 
     drawPreviewCanvas();
+    updateSvgBBoxDisplay();
     showToast('SVG traité avec succès.', 'success');
     updateUIState();
+}
+
+/**
+ * Calcule et affiche les coordonnées des deux coins extrémaux du SVG
+ * (après transformation scale/offset/rotation) dans l'UI.
+ */
+function updateSvgBBoxDisplay() {
+    const el = document.getElementById('svg-bbox-info');
+    if (!el) return;
+
+    if (svgPolylines.length === 0) {
+        el.textContent = '';
+        el.style.display = 'none';
+        return;
+    }
+
+    const s = loadSettings();
+    const rotRad = rotationAngle * Math.PI / 180;
+    const cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    svgPolylines.forEach(poly => {
+        poly.forEach(pt => {
+            const rx = cosR * pt.x - sinR * pt.y;
+            const ry = sinR * pt.x + cosR * pt.y;
+            const mmX = rx * scaleFactor + offsetX;
+            const mmY = ry * scaleFactor + offsetY;
+            if (mmX < minX) minX = mmX;
+            if (mmY < minY) minY = mmY;
+            if (mmX > maxX) maxX = mmX;
+            if (mmY > maxY) maxY = mmY;
+        });
+    });
+
+    if (!isFinite(minX)) {
+        el.textContent = '';
+        el.style.display = 'none';
+        return;
+    }
+
+    el.style.display = 'block';
+    el.innerHTML =
+        `<i class="fas fa-vector-square"></i> ` +
+        `SVG : <b>(${minX.toFixed(1)}, ${minY.toFixed(1)})</b> → ` +
+        `<b>(${maxX.toFixed(1)}, ${maxY.toFixed(1)})</b> mm`;
 }
 
 /**
@@ -1156,8 +1318,8 @@ function applyScaleFilter() {
     // minSeg est en mm réels. Dans le repère SVG, cela correspond à minSeg / scaleFactor.
     const effectiveMin = scaleFactor > 0 ? minSeg / scaleFactor : minSeg;
 
-    svgPolylines       = decimatePolylines(_rawSvgPolylines, effectiveMin);
-    hatchPolylines     = decimatePolylines(_rawHatchPolylines, effectiveMin);
+    svgPolylines = decimatePolylines(_rawSvgPolylines, effectiveMin);
+    hatchPolylines = decimatePolylines(_rawHatchPolylines, effectiveMin);
 
     // Compter les segments
     totalSegments = 0;
@@ -1210,11 +1372,11 @@ function updateSegmentStats() {
 
 function handleSvgUpload(e) {
     const file = e.target.files[0];
-    if(!file) return;
+    if (!file) return;
     document.getElementById('file-name').innerText = file.name;
-    
+
     const reader = new FileReader();
-    reader.onload = function(evt) {
+    reader.onload = function (evt) {
         currentSvgContent = evt.target.result;
         reparseSVG();
     };
@@ -1225,14 +1387,14 @@ function handlePaperChange(e) {
     const v = e.target.value;
     // Formats standards (toujours dans le sens naturel W×H)
     const formats = {
-        'A4':   [210, 297],
-        'B5':   [176, 250],
-        'A5':   [148, 210],
-        'B6':   [125, 176],
-        'A6':   [105, 148],
-        'B7':   [88,  125],
-        'A7':   [74,  105],
-        'A8':   [52,  74],
+        'A4': [210, 297],
+        'B5': [176, 250],
+        'A5': [148, 210],
+        'B6': [125, 176],
+        'A6': [105, 148],
+        'B7': [88, 125],
+        'A7': [74, 105],
+        'A8': [52, 74],
         'CUSTOM': [loadSettings().xmax, loadSettings().ymax],
     };
     if (formats[v]) { [paperW, paperH] = formats[v]; }
@@ -1247,16 +1409,16 @@ function drawPreviewCanvas() {
     // ── HiDPI : taille physique réelle du canvas CSS ──────────────────
     const dpr = window.devicePixelRatio || 1;
     const wrapper = document.getElementById('preview-wrapper');
-    const cssW = wrapper ? wrapper.clientWidth  || 400 : 400;
+    const cssW = wrapper ? wrapper.clientWidth || 400 : 400;
     const cssH = wrapper ? wrapper.clientHeight || cssW : cssW;
     const physW = Math.round(cssW * dpr);
     const physH = Math.round(physW); // carré
 
     // Ne redimensionne que si nécessaire (évite les reflows inutiles)
     if (canvas.width !== physW || canvas.height !== physH) {
-        canvas.width  = physW;
+        canvas.width = physW;
         canvas.height = physH;
-        canvas.style.width  = cssW + 'px';
+        canvas.style.width = cssW + 'px';
         canvas.style.height = cssW + 'px';
     }
 
@@ -1284,6 +1446,9 @@ function drawPreviewCanvas() {
     if (window._drawHandleOverlay) {
         window._drawHandleOverlay(ctx, W, H);
     }
+
+    // Mise à jour du bounding box SVG (coins extrémaux en mm)
+    updateSvgBBoxDisplay();
 
     // Synchronise la modale de prévisualisation si ouverte
     const previewModal = document.getElementById('modal-preview');
@@ -1328,25 +1493,25 @@ function _renderPreviewToContext(ctx, W, H, zoom = 1) {
     const pCxPx = pxX + pwPx / 2;
     const pCyPx = pxY + phPx / 2;
     const pAngRad = paperAngle * Math.PI / 180;
-    
+
     ctx.save();
     ctx.translate(pCxPx, pCyPx);
     ctx.rotate(pAngRad);
     ctx.shadowColor = 'rgba(0,0,0,0.18)';
-    ctx.shadowBlur = 8 / zoom; 
-    ctx.shadowOffsetX = 2 / zoom; 
+    ctx.shadowBlur = 8 / zoom;
+    ctx.shadowOffsetX = 2 / zoom;
     ctx.shadowOffsetY = 2 / zoom;
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(-pwPx/2, -phPx/2, pwPx, phPx);
-    ctx.shadowColor = 'transparent'; 
+    ctx.fillRect(-pwPx / 2, -phPx / 2, pwPx, phPx);
+    ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
-    ctx.strokeStyle = '#aaaaaa'; 
+    ctx.strokeStyle = '#aaaaaa';
     ctx.lineWidth = 1 / zoom;
-    ctx.strokeRect(-pwPx/2, -phPx/2, pwPx, phPx);
+    ctx.strokeRect(-pwPx / 2, -phPx / 2, pwPx, phPx);
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     // Le texte garde sa taille proportionnelle à la feuille, donc on ne divise pas la taille de la police par zoom
     ctx.font = `bold ${Math.max(9, pwPx * 0.08)}px sans-serif`;
-    ctx.fillText(`${paperW}×${paperH}mm`, -pwPx/2 + 4, -phPx/2 + Math.max(12, pwPx * 0.09));
+    ctx.fillText(`${paperW}×${paperH}mm`, -pwPx / 2 + 4, -phPx / 2 + Math.max(12, pwPx * 0.09));
     ctx.restore();
 
     // Transformation SVG
@@ -1368,7 +1533,7 @@ function _renderPreviewToContext(ctx, W, H, zoom = 1) {
     // Vérification hors-feuille
     const pCxMm = paperOffsetX + paperW / 2;
     const pCyMm = paperOffsetY + paperH / 2;
-    const pAngR = -paperAngle * Math.PI / 180; 
+    const pAngR = -paperAngle * Math.PI / 180;
     const cosPa = Math.cos(pAngR), sinPa = Math.sin(pAngR);
     svgPolylines.forEach(poly => {
         poly.forEach(pt => {
@@ -1424,13 +1589,13 @@ function _renderPreviewToContext(ctx, W, H, zoom = 1) {
                     ctx.lineTo(cx, cy);
                 }
                 ctx.stroke();
-                
+
                 for (let i = 1; i < poly.length; i++) {
-                    const rx0 = cosR*poly[i-1].x - sinR*poly[i-1].y;
-                    const ry0 = sinR*poly[i-1].x + cosR*poly[i-1].y;
-                    const rx1 = cosR*poly[i].x - sinR*poly[i].y;
-                    const ry1 = sinR*poly[i].x + cosR*poly[i].y;
-                    totalDrawDist += Math.hypot((rx1-rx0)*scaleFactor, (ry1-ry0)*scaleFactor);
+                    const rx0 = cosR * poly[i - 1].x - sinR * poly[i - 1].y;
+                    const ry0 = sinR * poly[i - 1].x + cosR * poly[i - 1].y;
+                    const rx1 = cosR * poly[i].x - sinR * poly[i].y;
+                    const ry1 = sinR * poly[i].x + cosR * poly[i].y;
+                    totalDrawDist += Math.hypot((rx1 - rx0) * scaleFactor, (ry1 - ry0) * scaleFactor);
                 }
             });
         }
@@ -1488,12 +1653,77 @@ function _renderPreviewToContext(ctx, W, H, zoom = 1) {
                 ctx.beginPath();
                 ctx.arc(cx, cy, (4 + pulse * 3) / zoom, 0, Math.PI * 2);
                 ctx.fillStyle = `rgba(231,76,60,${0.6 + pulse * 0.4})`;
-                ctx.shadowColor = '#e74c3c'; 
+                ctx.shadowColor = '#e74c3c';
                 ctx.shadowBlur = 12 / zoom;
-                ctx.fill(); 
+                ctx.fill();
                 ctx.shadowBlur = 0;
             }
         }
+    }
+
+    // ── Repère machine (origine = coin supérieur droit) ───────────────────────
+    // X pointe vers la gauche, Y pointe vers le bas (convention H-bot après homing)
+    {
+        const AXIS_LEN = Math.round(Math.min(W, H) * 0.18); // longueur des flèches (18% du canvas)
+        const ARROW_HEAD = Math.round(AXIS_LEN * 0.22);       // tête de flèche
+        const OX = W - 2;   // origine en pixels : coin supérieur droit
+        const OY = 2;
+        const LW = Math.max(1.5, 2.5 / zoom);
+
+        ctx.save();
+        ctx.lineWidth = LW;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
+
+        // Point d'origine
+        ctx.beginPath();
+        ctx.arc(OX, OY, LW * 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = '#c0392b';
+        ctx.fill();
+
+        // ─ Axe X (pointe vers la gauche) ─
+        ctx.strokeStyle = '#c0392b';
+        ctx.fillStyle = '#c0392b';
+        ctx.beginPath();
+        ctx.moveTo(OX, OY);
+        ctx.lineTo(OX - AXIS_LEN, OY);
+        ctx.stroke();
+        // Tête de flèche X
+        ctx.beginPath();
+        ctx.moveTo(OX - AXIS_LEN, OY);
+        ctx.lineTo(OX - AXIS_LEN + ARROW_HEAD, OY - ARROW_HEAD * 0.42);
+        ctx.lineTo(OX - AXIS_LEN + ARROW_HEAD, OY + ARROW_HEAD * 0.42);
+        ctx.closePath();
+        ctx.fill();
+        // Label "x"
+        const fSize = Math.max(11, Math.round(AXIS_LEN * 0.2));
+        ctx.font = `italic bold ${fSize}px serif`;
+        ctx.fillStyle = '#c0392b';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('x', OX - AXIS_LEN - fSize * 0.7, OY + fSize * 0.9);
+
+        // ─ Axe Y (pointe vers le bas) ─
+        ctx.strokeStyle = '#c0392b';
+        ctx.fillStyle = '#c0392b';
+        ctx.beginPath();
+        ctx.moveTo(OX, OY);
+        ctx.lineTo(OX, OY + AXIS_LEN);
+        ctx.stroke();
+        // Tête de flèche Y
+        ctx.beginPath();
+        ctx.moveTo(OX, OY + AXIS_LEN);
+        ctx.lineTo(OX - ARROW_HEAD * 0.42, OY + AXIS_LEN - ARROW_HEAD);
+        ctx.lineTo(OX + ARROW_HEAD * 0.42, OY + AXIS_LEN - ARROW_HEAD);
+        ctx.closePath();
+        ctx.fill();
+        // Label "y"
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('y', OX + fSize * 0.35, OY + AXIS_LEN + fSize * 0.7);
+
+        ctx.restore();
     }
 
     return isOutOfPaper;
@@ -1506,10 +1736,21 @@ function _renderPreviewToContext(ctx, W, H, zoom = 1) {
 
 function onOkReceived() {
     okCount++;
+    // Mise à jour de l'état logique du stylo (pour l'indicateur UI)
+    if (okCount > 0 && commandMap.length > 0) {
+        const lastCmd = commandMap[okCount - 1];
+        if (lastCmd) {
+            if (lastCmd.type === 'z-down' || lastCmd.type === 'hatch-down') penIsDown = true;
+            else if (lastCmd.type === 'z-up' || lastCmd.type === 'hatch-up' ||
+                lastCmd.type === 'homing-z') penIsDown = false;
+        }
+    }
     updateDigitalTwin();
-    if(okCount >= commandMap.length) {
+    if (okCount >= commandMap.length) {
         stopSimulation();
         stopTwinAnimation();
+        penIsDown = false;  // Stylo levé à la fin
+        updatePenStateIndicator();
         changeState(SystemState.IDLE);
         showToast("✓ Tracé terminé !", "success");
         playBeep('ok');
@@ -1524,14 +1765,14 @@ function updateDigitalTwin() {
     bar.classList.add('running-anim');
 
     const totalDraw = commandMap.filter(c => c.draws).length;
-    const doneDraw  = commandMap.slice(0, okCount).filter(c => c.draws).length;
+    const doneDraw = commandMap.slice(0, okCount).filter(c => c.draws).length;
     const elConfirm = document.getElementById('stat-confirmed-segs');
-    if(elConfirm) elConfirm.innerText = `${doneDraw} / ${totalDraw}`;
+    if (elConfirm) elConfirm.innerText = `${doneDraw} / ${totalDraw}`;
     const elStatSegs = document.getElementById('plot-stat-segs');
-    if(elStatSegs) elStatSegs.innerText = `${doneDraw} / ${totalDraw}`;
+    if (elStatSegs) elStatSegs.innerText = `${doneDraw} / ${totalDraw}`;
 
-    if(plotStartTime && okCount > 3) {
-        const elapsed  = (Date.now() - plotStartTime) / 1000;
+    if (plotStartTime && okCount > 3) {
+        const elapsed = (Date.now() - plotStartTime) / 1000;
         const remaining = ((elapsed / okCount) * (total - okCount));
         const mins = Math.floor(remaining / 60);
         const secs = Math.floor(remaining % 60);
@@ -1539,15 +1780,34 @@ function updateDigitalTwin() {
         document.getElementById('stat-eta').innerText = etaStr;
         document.getElementById('stat-eta').classList.add('eta-running');
         const elStatEta = document.getElementById('plot-stat-eta');
-        if(elStatEta) elStatEta.innerText = etaStr;
+        if (elStatEta) elStatEta.innerText = etaStr;
+    }
+
+    // Indicateur visuel stylo
+    updatePenStateIndicator();
+}
+
+/**
+ * Met à jour le badge indicateur de position du stylo (levé / baissé).
+ * Visible uniquement pendant le tracé auto.
+ */
+function updatePenStateIndicator() {
+    const badge = document.getElementById('pen-state-badge');
+    if (!badge) return;
+    if (penIsDown) {
+        badge.className = 'pen-state-badge pen-down';
+        badge.innerHTML = '<i class="fas fa-pen-nib"></i> Stylo <strong>BAISSÉ</strong>';
+    } else {
+        badge.className = 'pen-state-badge pen-up';
+        badge.innerHTML = '<i class="fas fa-arrow-up"></i> Stylo <strong>LEVÉ</strong>';
     }
 }
 
 function getConfirmedSegments() {
     const segs = [];
-    for(let i = 0; i < Math.min(okCount, commandMap.length); i++) {
+    for (let i = 0; i < Math.min(okCount, commandMap.length); i++) {
         const cmd = commandMap[i];
-        if(cmd.draws) segs.push({ polylineIdx: cmd.polylineIdx, fromIdx: cmd.pointIdx - 1, toIdx: cmd.pointIdx });
+        if (cmd.draws) segs.push({ polylineIdx: cmd.polylineIdx, fromIdx: cmd.pointIdx - 1, toIdx: cmd.pointIdx });
     }
     return segs;
 }
@@ -1555,7 +1815,7 @@ function getConfirmedSegments() {
 function startTwinAnimation() {
     stopTwinAnimation();
     function loop() {
-        if(currentState === SystemState.RUNNING) {
+        if (currentState === SystemState.RUNNING) {
             drawPreviewCanvas();
             animFrameId = requestAnimationFrame(loop);
         }
@@ -1564,7 +1824,7 @@ function startTwinAnimation() {
 }
 
 function stopTwinAnimation() {
-    if(animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+    if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
 }
 
 function startSimulation() {
@@ -1573,7 +1833,7 @@ function startSimulation() {
     // Vitesse simulation : proportionnel à la vitesse de tracé (50ms par défaut)
     const msPerCmd = Math.max(20, Math.min(200, Math.round(1000 / (s.vdraw || 40))));
     simulationTimer = setInterval(() => {
-        if(okCount >= commandMap.length || currentState !== SystemState.RUNNING) {
+        if (okCount >= commandMap.length || currentState !== SystemState.RUNNING) {
             stopSimulation(); return;
         }
         onOkReceived();
@@ -1581,7 +1841,7 @@ function startSimulation() {
 }
 
 function stopSimulation() {
-    if(simulationTimer) { clearInterval(simulationTimer); simulationTimer = null; }
+    if (simulationTimer) { clearInterval(simulationTimer); simulationTimer = null; }
 }
 
 function startPlotting(simulate = false) {
@@ -1615,12 +1875,13 @@ function _executePlotting(simulate = false) {
     changeState(SystemState.RUNNING);
     commandMap = [];
     okCount = 0;
+    penIsDown = false;     // Réinitialise l'état logique du stylo
     plotStartTime = Date.now();
 
     const s = loadSettings();
     const rotRad = rotationAngle * Math.PI / 180;
     const cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
-    let curX = 0, curY = 0;
+    let curX = 0, curY = 0, curZ = 0;
 
     const addCmd = (cmd, meta) => {
         commandMap.push(meta);
@@ -1628,60 +1889,114 @@ function _executePlotting(simulate = false) {
     };
 
     // Helper : transforme un point SVG → coordonnées machine
+    // NOTE : l'axe X de la machine est physiquement inversé par rapport à SVG
+    // (après homing, X croît vers la gauche côté machine).
+    // On corrige par symétrie autour de la largeur de l'espace de travail.
     const transform = (pt) => {
         const rx = cosR * pt.x - sinR * pt.y;
         const ry = sinR * pt.x + cosR * pt.y;
         return {
-            x: (rx * scaleFactor + offsetX) * s.calib,
+            x: (s.xmax - (rx * scaleFactor + offsetX)) * s.calib,
             y: (ry * scaleFactor + offsetY) * s.calib
         };
     };
 
-    addCmd('i', { type: 'homing', draws: false });
-    addCmd(`z${s.zup}v${s.vfast}`, { type: 'z-up', draws: false });
+    // ── Garde-fous stylo ─────────────────────────────────────────────────
+    // penLogicalDown suit l'état LOGIQUE (pas le float curZ) pour éviter
+    // tout double-down ou double-up consécutif, quelles que soient les
+    // valeurs de zup/zdown ou les erreurs d'arrondi flottant.
+    let penLogicalDown = false;  // stylo levé après homing Z
+
+    // Vitesse minimale firmware = 150 RPM — on clamp pour éviter que
+    // la carte ignore silencieusement nos vitesses trop basses.
+    const vfast = Math.max(s.vfast, 150);
+    const vdraw = Math.max(s.vdraw, 150);
+
+    const penDown = (meta) => {
+        if (penLogicalDown) return;  // GARDE-FOU : déjà baissé → on ignore
+        const dz = s.zdown - curZ;
+        if (Math.abs(dz) < 0.005) { penLogicalDown = true; return; } // delta nul
+        addCmd(`z${dz.toFixed(2)}v${vfast}`, { ...meta, type: 'z-down', draws: false });
+        curZ = s.zdown;
+        penLogicalDown = true;
+    };
+
+    const penUp = (meta) => {
+        if (!penLogicalDown) return;  // GARDE-FOU : déjà levé → on ignore
+        const dz = s.zup - curZ;
+        if (Math.abs(dz) < 0.005) { penLogicalDown = false; return; } // delta nul
+        addCmd(`z${dz.toFixed(2)}v${vfast}`, { ...meta, type: 'z-up', draws: false });
+        curZ = s.zup;
+        penLogicalDown = false;
+    };
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Homing complet avant tout tracé : Z puis XY
+    addCmd('k', { type: 'homing-z', draws: false });   // Homing Z  → stepsZ=0 (origine haute)
+    addCmd('i', { type: 'homing-xy', draws: false });   // Homing XY → curX=0, curY=0
+    // Après k, le stylo est physiquement à l'origine Z (stepsZ=0 sur l'Arduino).
+    // curZ doit refléter cette position PHYSIQUE (0), PAS la valeur zup de l'utilisateur.
+    // Les deltas de penDown/penUp seront calculés correctement :
+    //   penDown: dz = s.zdown - 0 = +zdown (descente)
+    //   penUp:   dz = s.zup   - s.zdown = négatif (remontée)
+    curX = 0; curY = 0; curZ = 0;
+    penLogicalDown = false;
+
 
     svgPolylines.forEach((poly, polyIdx) => {
+        // Déplacement XY rapide vers le début de la polyline (stylo levé)
         const p0 = transform(poly[0]);
-        let dx = p0.x - curX, dy = p0.y - curY;
-        if (dx !== 0 || dy !== 0) {
-            addCmd(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${s.vfast}`,
+        const dx = p0.x - curX, dy = p0.y - curY;
+        // Garde-fou : ne PAS envoyer si les deux deltas arrondis à 0.01mm sont nuls
+        // (le firmware renvoie ERR si dx=0 ET dy=0, ce qui bloque la file)
+        if (Math.abs(dx) >= 0.005 || Math.abs(dy) >= 0.005) {
+            addCmd(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${vfast}`,
                 { type: 'travel', draws: false, polylineIdx: polyIdx });
             curX = p0.x; curY = p0.y;
         }
 
-        addCmd(`z-${s.zup}v${s.vfast}`, { type: 'z-down', draws: false, polylineIdx: polyIdx });
+        // Descente du stylo (garde-fou inclus)
+        penDown({ polylineIdx: polyIdx });
 
         for (let i = 1; i < poly.length; i++) {
             const p = transform(poly[i]);
-            addCmd(`x${(p.x - curX).toFixed(2)}y${(p.y - curY).toFixed(2)}v${s.vdraw}`,
+            const ddx = p.x - curX, ddy = p.y - curY;
+            // Garde-fou : sauter les segments nuls (évite ERR firmware)
+            if (Math.abs(ddx) < 0.005 && Math.abs(ddy) < 0.005) continue;
+            addCmd(`x${ddx.toFixed(2)}y${ddy.toFixed(2)}v${vdraw}`,
                 { type: 'draw', draws: true, polylineIdx: polyIdx, pointIdx: i });
             curX = p.x; curY = p.y;
         }
 
-        addCmd(`z${s.zup}v${s.vfast}`, { type: 'z-up', draws: false, polylineIdx: polyIdx });
+        // Montée du stylo (garde-fou inclus)
+        penUp({ polylineIdx: polyIdx });
     });
 
     // Hachures de remplissage (APRÈS tous les contours)
     hatchPolylines.forEach((poly, hIdx) => {
         if (poly.length < 2) return;
-        const p0 = transform(poly[0]);
-        const dx = p0.x - curX, dy = p0.y - curY;
-        if (dx !== 0 || dy !== 0) {
-            addCmd(`x${dx.toFixed(2)}y${dy.toFixed(2)}v${s.vfast}`,
+        const p0h = transform(poly[0]);
+        const dxh = p0h.x - curX, dyh = p0h.y - curY;
+        if (Math.abs(dxh) >= 0.005 || Math.abs(dyh) >= 0.005) {
+            addCmd(`x${dxh.toFixed(2)}y${dyh.toFixed(2)}v${vfast}`,
                 { type: 'hatch-travel', draws: false });
-            curX = p0.x; curY = p0.y;
+            curX = p0h.x; curY = p0h.y;
         }
 
-        addCmd(`z-${s.zup}v${s.vfast}`, { type: 'hatch-down', draws: false });
+        // Descente du stylo (garde-fou inclus)
+        penDown({ polylineIdx: -1 });
 
         for (let i = 1; i < poly.length; i++) {
             const p = transform(poly[i]);
-            addCmd(`x${(p.x - curX).toFixed(2)}y${(p.y - curY).toFixed(2)}v${s.vdraw}`,
+            const hddx = p.x - curX, hddy = p.y - curY;
+            if (Math.abs(hddx) < 0.005 && Math.abs(hddy) < 0.005) continue;
+            addCmd(`x${hddx.toFixed(2)}y${hddy.toFixed(2)}v${vdraw}`,
                 { type: 'hatch-draw', draws: true, polylineIdx: -1, pointIdx: i });
             curX = p.x; curY = p.y;
         }
 
-        addCmd(`z${s.zup}v${s.vfast}`, { type: 'hatch-up', draws: false });
+        // Montée du stylo (garde-fou inclus)
+        penUp({ polylineIdx: -1 });
     });
 
     document.getElementById('progress-bar').style.width = '0%';
@@ -1702,12 +2017,12 @@ function logConsole(type, msg) {
     const div = document.createElement('div');
     const prefix = type === 'tx' ? '➤' : type === 'rx' ? '◁' : '❗';
     div.innerHTML = `<span class="text-muted">[${ts}]</span> <span class="${type}">${prefix} ${msg}</span>`;
-    
+
     const filter = document.querySelector('input[name="c-filter"]:checked').value;
-    if(filter !== 'all' && filter !== type) {
+    if (filter !== 'all' && filter !== type) {
         div.style.display = 'none';
     }
-    
+
     out.appendChild(div);
     out.scrollTop = out.scrollHeight;
 }
@@ -1718,14 +2033,14 @@ function clearConsole() {
 
 function initKeyboardShortcuts() {
     window.addEventListener('keydown', (e) => {
-        if(e.shiftKey) {
-            switch(e.key.toLowerCase()) {
+        if (e.shiftKey) {
+            switch (e.key.toLowerCase()) {
                 case 's': e.preventDefault(); triggerEStop(); break;
                 case 'u': e.preventDefault(); toggleConnection(); break;
-                case 'h': e.preventDefault(); if(isConnected) queueCommand('i'); break;
+                case 'h': e.preventDefault(); if (isConnected) queueCommand('i'); break;
                 case 'c': e.preventDefault(); document.getElementById('nav-home').click(); break;
                 case 'o': e.preventDefault(); document.getElementById('nav-command').click(); break;
-                case 't': e.preventDefault(); if(!document.getElementById('btn-start-auto').disabled) startPlotting(); break;
+                case 't': e.preventDefault(); if (!document.getElementById('btn-start-auto').disabled) startPlotting(); break;
             }
         }
     });
@@ -1734,10 +2049,10 @@ function initKeyboardShortcuts() {
         r.addEventListener('change', () => {
             const val = r.value;
             const lines = document.getElementById('console-output').children;
-            for(let l of lines) {
-                if(val === 'all') l.style.display = '';
+            for (let l of lines) {
+                if (val === 'all') l.style.display = '';
                 else {
-                    if(l.innerHTML.includes(`class="${val}"`)) l.style.display = '';
+                    if (l.innerHTML.includes(`class="${val}"`)) l.style.display = '';
                     else l.style.display = 'none';
                 }
             }
@@ -1793,27 +2108,27 @@ function syncPreviewModal() {
 
     // On applique le pan (glissement)
     ctx.translate(physW / 2 + _modalPanX * dpr, physH / 2 + _modalPanY * dpr);
-    
+
     // On applique le zoom
     ctx.scale(_modalZoom, _modalZoom);
-    
+
     // On centre la zone de dessin
     ctx.translate(-baseW / 2, -baseH / 2);
 
     // On compense l'épaisseur des traits pour qu'ils restent fins lors du zoom
     const originalLineWidth = ctx.lineWidth;
-    
+
     // Rendu vectoriel parfait
     if (typeof _renderPreviewToContext === 'function') {
         // Redéfinir temporairement strokeRect, moveTo, lineTo etc si on voulait une épaisseur constante ?
         // ctx.scale() est la méthode la plus rapide.
         _renderPreviewToContext(ctx, baseW, baseH, _modalZoom);
-        
+
         if (window._drawHandleOverlay && showTransformHandles) {
             window._drawHandleOverlay(ctx, baseW, baseH);
         }
     }
-    
+
     ctx.restore();
 }
 
@@ -1825,7 +2140,7 @@ function _initModalCanvasEvents() {
     // Zoom molette
     c.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.12 : 1/1.12;
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
         _modalZoom = Math.max(0.3, Math.min(20, _modalZoom * factor));
         syncPreviewModal();
     }, { passive: false });
